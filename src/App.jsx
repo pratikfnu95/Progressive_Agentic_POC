@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   History,
+  Menu,
   Search,
   Sparkles,
   SquarePen,
@@ -60,7 +61,7 @@ function SidebarArtwork() {
   );
 }
 
-function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat }) {
+function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen }) {
   const [searching, setSearching] = useState(false);
   const [searchText, setSearchText] = useState('');
   const searchRef = useRef(null);
@@ -74,7 +75,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat }) {
   );
 
   return (
-    <aside className="sidebar">
+    <aside id="app-sidebar" className={`sidebar${mobileOpen ? ' is-mobile-open' : ''}`}>
       <div className="sidebar-topline">
         <BrandLockup />
       </div>
@@ -180,11 +181,13 @@ function App() {
   const [activeChatId, setActiveChatId] = useState(null);
   const [draft, setDraft] = useState('');
   const [welcomePrompt, setWelcomePrompt] = useState(() => chooseWelcomePrompt());
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const messagesEndRef = useRef(null);
   const activeChat = chats.find((chat) => chat.id === activeChatId);
 
   useEffect(() => {
     function onKeyDown(event) {
+      if (event.key === 'Escape') setMobileSidebarOpen(false);
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         startNewChat();
@@ -201,7 +204,13 @@ function App() {
   function startNewChat() {
     setActiveChatId(null);
     setDraft('');
+    setMobileSidebarOpen(false);
     setWelcomePrompt((current) => chooseWelcomePrompt(current.heading));
+  }
+
+  function selectChat(chatId) {
+    setActiveChatId(chatId);
+    setMobileSidebarOpen(false);
   }
 
   function sendMessage(value = draft) {
@@ -225,14 +234,32 @@ function App() {
 
   return (
     <div className="app-shell">
+      {mobileSidebarOpen && (
+        <button
+          className="sidebar-backdrop"
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-label="Close navigation menu"
+        />
+      )}
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
-        setActiveChatId={setActiveChatId}
+        setActiveChatId={selectChat}
         onNewChat={startNewChat}
+        mobileOpen={mobileSidebarOpen}
       />
 
       <main className="main-panel">
+        <button
+          className="mobile-sidebar-toggle"
+          type="button"
+          onClick={() => setMobileSidebarOpen((open) => !open)}
+          aria-label={mobileSidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-expanded={mobileSidebarOpen}
+          aria-controls="app-sidebar"
+        >
+          <Menu size={21} strokeWidth={1.8} />
+        </button>
         {!activeChat ? (
           <section className="welcome-view">
             <div className="welcome-content">
