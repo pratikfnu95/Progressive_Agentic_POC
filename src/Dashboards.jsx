@@ -190,13 +190,14 @@ function TicketBreakdown({ tickets }) {
 }
 
 function ActivityPanel({ policy = false, events = [] }) {
+  const activityLimit = 6;
   const items = policy ? [
     ['Premium mismatch flagged for WC-1001', '2 hours ago', 'mint'],
     ['Coverage issue identified for WC-2045', '4 hours ago', 'blue'],
     ['Policy status check completed', 'Yesterday', 'blue'],
     ['New data quality review opened', 'Yesterday', 'red'],
-  ] : events;
-  return <section className="dashboard-panel dashboard-activity"><div className="dashboard-panel-heading"><h2>Recent Activity</h2><button className="dashboard-text-button" aria-label="View all activity">View All<ChevronRight size={15} /></button></div>
+  ] : events.slice(0, activityLimit);
+  return <section className="dashboard-panel dashboard-activity"><div className="dashboard-panel-heading"><h2>Recent Activity</h2></div>
     {items.length ? <ol>{items.map((event) => {
       const label = Array.isArray(event) ? event[0] : event.message;
       const time = Array.isArray(event) ? event[1] : formatActivityTime(event.timestamp);

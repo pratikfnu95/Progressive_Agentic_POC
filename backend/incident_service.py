@@ -193,7 +193,7 @@ def _activity_message(event: dict, actor: str, names: dict[str, str]) -> str:
 
 
 def dashboard_snapshot() -> dict:
-    return {"tickets": _tickets("all"), "activity": list_activity()}
+    return {"tickets": _tickets("all"), "activity": list_activity(limit=6)}
 
 
 def classify_message(question: str, current_user: str = "Not signed in") -> dict:

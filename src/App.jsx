@@ -32,12 +32,12 @@ async function readApiResponse(response) {
 }
 
 const welcomePrompts = [
-  { heading: 'What’s on your mind?', placeholder: 'Message...' },
-  { heading: 'Ready when you are.', placeholder: 'Ask anything...' },
-  { heading: 'How can I help today?', placeholder: 'Type a message...' },
-  { heading: 'Let’s figure it out.', placeholder: 'Start a conversation...' },
-  { heading: 'Good to see you. What are we working on?', placeholder: 'Tell me what you have in mind...' },
-  { heading: 'How’s your day going?', placeholder: 'What would you like to talk about?' },
+  { heading: 'What’s on your mind?', personalizedHeading: 'Hi {name}, what’s on your mind?', placeholder: 'Message...' },
+  { heading: 'Ready when you are.', personalizedHeading: 'Ready when you are, {name}. What shall we work on?', placeholder: 'Ask anything...' },
+  { heading: 'How can I help today?', personalizedHeading: 'Hi {name}, how can I help today?', placeholder: 'Type a message...' },
+  { heading: 'Let’s figure it out.', personalizedHeading: 'Welcome, {name}. What would you like to figure out?', placeholder: 'Start a conversation...' },
+  { heading: 'Good to see you. What are we working on?', personalizedHeading: 'Hi {name}, good to see you. What are we working on?', placeholder: 'Tell me what you have in mind...' },
+  { heading: 'How’s your day going?', personalizedHeading: 'Good to see you, {name}. What would you like to talk about?', placeholder: 'What would you like to talk about?' },
 ];
 
 const activityCopy = {
@@ -403,20 +403,58 @@ function IncidentUpdatingStatus({ startedAt }) {
   return <div className="incident-update-status" role="status" aria-live="polite"><span aria-hidden="true"><i /><i /><i /></span>Saving the ticket update and syncing activity…<ElapsedTimer startedAt={startedAt} /></div>;
 }
 
+function formatTicketDetailDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(date);
+}
+
+function ChatTicketDetailsModal({ ticket, onClose }) {
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  const statusClass = String(ticket.ticket_status || 'Unknown').toLowerCase().replaceAll(' ', '-');
+  const policies = ticket.related_policies || [];
+  return <div className="dashboard-modal-backdrop chat-ticket-modal-backdrop" role="presentation" onClick={onClose}>
+    <section className="dashboard-modal dashboard-ticket-modal" role="dialog" aria-modal="true" aria-labelledby="chat-ticket-modal-title" onClick={(event) => event.stopPropagation()}>
+      <button className="dashboard-modal-close" type="button" onClick={onClose} aria-label="Close ticket details"><X size={18} /></button>
+      <span className="dashboard-modal-icon"><ClipboardList size={20} /></span>
+      <h2 id="chat-ticket-modal-title">{ticket.ticket_id}</h2>
+      <div className="ticket-detail-heading"><span className={`ticket-status status-${statusClass}`}>{ticket.ticket_status || 'Unknown'}</span><span>{ticket.issue_category || 'Incident'}</span></div>
+      <div className="ticket-detail-description"><span>Issue summary</span><p>{ticket.issue_summary || 'No summary provided.'}</p><span>Details</span><p>{ticket.issue_description || ticket.issue_summary || 'No additional details provided.'}</p></div>
+      <div className="ticket-detail-section"><h3>Related policies <span>{policies.length}</span></h3>
+        {policies.length ? <div className="ticket-policy-list">{policies.map((policy) => <div className="ticket-policy-item" key={`${ticket.ticket_id}-${policy.policy_number}`}><strong>{policy.policy_number}</strong><span className={`ticket-status status-${String(policy.policy_status || 'Unknown').toLowerCase().replaceAll(' ', '-')}`}>{policy.policy_status || 'Unknown'}</span></div>)}</div> : <p className="ticket-detail-muted">No policy is linked to this incident.</p>}
+      </div>
+      <div className="ticket-detail-grid"><div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatTicketDetailDate(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatTicketDetailDate(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatTicketDetailDate(ticket.acknowledged_at)}</strong></div>}</div>
+      <div className="ticket-detail-footer"><button className="dashboard-modal-secondary" type="button" onClick={onClose}>Close</button></div>
+    </section>
+  </div>;
+}
+
 function IncidentConversationResult({ result, currentUser, onAction }) {
   const [editors, setEditors] = useState({});
   const [fieldSelections, setFieldSelections] = useState({});
+  const [selectedTicket, setSelectedTicket] = useState(null);
   if (!result) return null;
-  if (result.kind === 'clarification') return <p className="incident-chat-note">{result.message}</p>;
+  if (result.kind === 'clarification') return null;
   if (result.kind === 'action_complete') return <><IncidentActionFeedback feedback={{ tone: 'green', icon: 'completed', title: result.message || 'Ticket updated successfully.', detail: result.ticket && `${result.ticket.ticket_id} · ${result.ticket.ticket_status} · ${result.ticket.assigned_to || 'Unassigned'}` }} /><IncidentResolutionGuide guide={result.resolution_guidance} error={result.resolution_guidance_error} /></>;
 
   function ticketCard(ticket) {
     const canManage = currentUser === 'Admin' || ticket.assigned_to === currentUser;
     const canDecline = currentUser && (!ticket.assigned_to || canManage);
     const editor = editors[ticket.ticket_id];
+    const statusSlug = String(ticket.ticket_status || 'unknown').toLowerCase().replaceAll(' ', '-');
     const setEditor = (value) => setEditors((current) => ({ ...current, [ticket.ticket_id]: value }));
-    return <article className="incident-chat-ticket" key={ticket.ticket_id}>
-      <header><strong>{ticket.ticket_id}</strong><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header>
+    return <article className={`incident-chat-ticket incident-ticket-${statusSlug}`} key={ticket.ticket_id}>
+      <header><button className="ticket-detail-link" type="button" onClick={() => setSelectedTicket(ticket)}>{ticket.ticket_id}</button><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header>
       <h4>{ticket.issue_summary}</h4>
       <p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p>
       {ticket.related_policies?.length > 0 && <small className="incident-chat-policies">Policies: {ticket.related_policies.map((policy) => `${policy.policy_number} (${policy.policy_status || 'Unknown'})`).join(', ')}</small>}
@@ -434,19 +472,20 @@ function IncidentConversationResult({ result, currentUser, onAction }) {
 
   if (result.kind === 'status_selection') {
     const ticket = result.ticket;
-    return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}</p><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><div className="incident-chat-choice-list">{result.statuses.map((status) => <button type="button" key={status} className={editors.selectedStatus === status ? 'selected' : ''} onClick={() => setEditors((current) => ({ ...current, selectedStatus: status }))}><i />{status === 'Waiting for Info' ? 'Request more access' : status}</button>)}</div><button className="incident-chat-primary" type="button" disabled={!editors.selectedStatus} onClick={() => onAction(ticket, 'set_status', { status: editors.selectedStatus })}>Save status</button></section>;
+    return <section className="incident-chat-result"><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><div className="incident-chat-choice-list">{result.statuses.map((status) => <button type="button" key={status} className={editors.selectedStatus === status ? 'selected' : ''} onClick={() => setEditors((current) => ({ ...current, selectedStatus: status }))}><i />{status === 'Waiting for Info' ? 'Request more access' : status}</button>)}</div><button className="incident-chat-primary" type="button" disabled={!editors.selectedStatus} onClick={() => onAction(ticket, 'set_status', { status: editors.selectedStatus })}>Save status</button></section>;
   }
 
   if (result.kind === 'assignee_selection') {
     const ticket = result.ticket;
-    return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}</p><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><ProgressiveSelect label="Assign to" value={editors.assignee || ''} placeholder="Select a teammate" options={result.assignees} onChange={(assignee) => setEditors((current) => ({ ...current, assignee }))} /><button className="incident-chat-primary" type="button" disabled={!editors.assignee} onClick={() => onAction(ticket, ticket.assigned_to ? 'assign_to_user' : 'acknowledge_assign', { assignee: editors.assignee })}>Save assignment</button></section>;
+    return <section className="incident-chat-result"><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><ProgressiveSelect label="Assign to" value={editors.assignee || ''} placeholder="Select a teammate" options={result.assignees} onChange={(assignee) => setEditors((current) => ({ ...current, assignee }))} /><button className="incident-chat-primary" type="button" disabled={!editors.assignee} onClick={() => onAction(ticket, ticket.assigned_to ? 'assign_to_user' : 'acknowledge_assign', { assignee: editors.assignee })}>Save assignment</button></section>;
   }
 
   function ticketCardWithoutActions(ticket) {
-    return <article className="incident-chat-ticket" key={ticket.ticket_id}><header><strong>{ticket.ticket_id}</strong><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header><h4>{ticket.issue_summary}</h4><p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p></article>;
+    const statusSlug = String(ticket.ticket_status || 'unknown').toLowerCase().replaceAll(' ', '-');
+    return <article className={`incident-chat-ticket incident-ticket-${statusSlug}`} key={ticket.ticket_id}><header><button className="ticket-detail-link" type="button" onClick={() => setSelectedTicket(ticket)}>{ticket.ticket_id}</button><span className={`ticket-status status-${statusSlug}`}>{ticket.ticket_status}</span></header><h4>{ticket.issue_summary}</h4><p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p></article>;
   }
 
-  if (result.kind === 'ticket_list') return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}{result.tickets?.length ? ` ${result.tickets.length} ticket${result.tickets.length === 1 ? '' : 's'} found.` : ''}</p>{result.tickets?.length ? <div className="incident-chat-ticket-list">{result.tickets.map(ticketCard)}</div> : <div className="incident-chat-empty">No matching incident tickets were found.</div>}</section>;
+  if (result.kind === 'ticket_list') return <><section className="incident-chat-result">{result.tickets?.length ? <div className="incident-chat-ticket-list">{result.tickets.map(ticketCard)}</div> : <div className="incident-chat-empty">No matching incident tickets were found.</div>}</section>{selectedTicket && <ChatTicketDetailsModal ticket={selectedTicket} onClose={() => setSelectedTicket(null)} />}</>;
   return null;
 }
 
@@ -721,6 +760,7 @@ function App() {
     const payload = await readApiResponse(response);
     if (!response.ok) throw new Error(payload.error || 'Could not sign in to this account.');
     setCurrentUser(payload.current_user);
+    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading));
     return payload;
   }
 
@@ -767,8 +807,14 @@ function App() {
         throw new Error(incidentPayload.error || 'The incident assistant could not process that request.');
       }
       if (incidentPayload.kind !== 'not_incident') {
+        const ticketCount = incidentPayload.tickets?.length || 0;
+        const assistantText = incidentPayload.kind === 'action_complete'
+          ? ''
+          : incidentPayload.kind === 'ticket_list'
+            ? `${incidentPayload.summary || 'Here are the matching tickets.'}${ticketCount ? ` ${ticketCount} ticket${ticketCount === 1 ? '' : 's'} found.` : ''}`
+            : incidentPayload.message || incidentPayload.summary || '';
         updateMessage(id, assistantId, {
-          content: incidentPayload.message || incidentPayload.summary || '',
+          content: assistantText,
           status: 'completed',
           responseDurationMs: Date.now() - assistantMessage.startedAt,
           incidentResult: incidentPayload,
@@ -942,7 +988,11 @@ function App() {
           <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
           <section className="welcome-view">
             <div className="welcome-content">
-              <h2 key={welcomePrompt.heading}>{welcomePrompt.heading}</h2>
+              <h2 key={`${currentUser || 'guest'}-${welcomePrompt.heading}`}>
+                {currentUser && welcomePrompt.personalizedHeading
+                  ? welcomePrompt.personalizedHeading.replace('{name}', currentUser)
+                  : welcomePrompt.heading}
+              </h2>
               <div className="welcome-composer-wrap">
                 <Composer
                   value={draft}
