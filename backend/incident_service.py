@@ -288,6 +288,11 @@ def _apply_action(ticket_id: str, actor: dict, operation: str, *, assignee_name=
         )
         _record_event(ticket_id.upper(), actor, "STATUS_CHANGED", from_status=old_status, to_status=status)
     elif operation == "unassign":
+        # The dashboard can be stale if another session already unassigned
+        # the ticket. Treat that repeat request as an idempotent no-op so the
+        # caller can refresh its snapshot instead of presenting a false error.
+        if not old_assignee:
+            return {"ticket": ticket, "activity": list_activity(), "no_op": True}
         _require_ticket_permission(ticket, actor)
         _execute(
             f"UPDATE {TICKETS} SET assigned_to_user_id = NULL, ticket_status = 'Unassigned', "
@@ -315,6 +320,14 @@ def handle_incident_request(payload: dict) -> dict:
         return {"kind": "snapshot", **dashboard_snapshot()}
     current_user = str(payload.get("current_user", "")).strip()
     actor = None
+    if action == "investigation_guidance":
+        if not current_user:
+            raise IncidentError("Sign in to view investigation guidance.", 401)
+        actor = _member(current_user)
+        ticket = _get_ticket(str(payload.get("ticket_id", "")).strip().upper())
+        if actor["role"] != "ADMIN" and str(ticket.get("assigned_to_user_id") or "") != str(actor["user_id"]):
+            raise IncidentError("Investigation guidance is available to the assigned owner or Admin.", 403)
+        return {"kind": "investigation_guidance", "investigation_action": True, "ticket": ticket}
     if action == "mutate":
         if not current_user:
             raise IncidentError("Sign in to change incident tickets.", 401)

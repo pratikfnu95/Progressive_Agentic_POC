@@ -15,7 +15,6 @@ import {
   BookOpenText,
   Menu,
   PartyPopper,
-  Search,
   Sparkles,
   SquarePen,
   X,
@@ -372,6 +371,25 @@ function QueryResultsTable({ result }) {
   const [copyState, setCopyState] = useState('idle');
   const [selectedPolicy, setSelectedPolicy] = useState(null);
   const policyNumberIndex = findColumnIndex(result.columns, ['policy_number']);
+  const premiumIndex = findColumnIndex(result.columns, ['written_premium', 'written_premium_total', 'total_written_premium']);
+  const distinctPolicies = policyNumberIndex >= 0
+    ? new Set(result.rows.map((row) => row[policyNumberIndex]).filter((value) => value != null && String(value).trim()).map(String)).size
+    : 0;
+  let resultNarrative = '';
+  if (policyNumberIndex >= 0 && distinctPolicies > 0) {
+    resultNarrative = `I found ${distinctPolicies} distinct ${distinctPolicies === 1 ? 'policy' : 'policies'} in ${result.row_count} returned ${result.row_count === 1 ? 'row' : 'rows'}.`;
+  } else {
+    resultNarrative = `The query returned ${result.row_count} ${result.row_count === 1 ? 'row' : 'rows'} across ${result.columns.length} ${result.columns.length === 1 ? 'column' : 'columns'}.`;
+  }
+  if (premiumIndex >= 0 && !result.truncated && result.rows.length) {
+    const premiumValues = result.rows.map((row) => row[premiumIndex]);
+    const numericPremiums = premiumValues.map((value) => value == null || value === '' ? null : Number(value));
+    if (numericPremiums.some((value) => value !== null) && numericPremiums.every((value) => value === null || Number.isFinite(value))) {
+      const total = numericPremiums.reduce((sum, value) => sum + (value ?? 0), 0);
+      resultNarrative += ` Written premium across these rows totals ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(total)}.`;
+    }
+  }
+  if (result.truncated && premiumIndex >= 0) resultNarrative += ' Results are capped, so a full premium total is not shown.';
 
   useEffect(() => {
     if (!selectedPolicy) return undefined;
@@ -410,7 +428,9 @@ function QueryResultsTable({ result }) {
   }
 
   return (
-    <section className="query-results" aria-label="Query results">
+    <>
+      <p className="result-narrative">{resultNarrative}</p>
+      <section className="query-results" aria-label="Query results">
       <div className="results-heading">
         <div className="results-summary">
           <strong>Results</strong>
@@ -449,7 +469,8 @@ function QueryResultsTable({ result }) {
           <footer>Details are limited to the columns returned by this query.</footer>
         </section>
       </div>}
-    </section>
+      </section>
+    </>
   );
 }
 
@@ -636,18 +657,6 @@ function SidebarArtwork() {
 }
 
 function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, currentPage, setCurrentPage }) {
-  const [searching, setSearching] = useState(false);
-  const [searchText, setSearchText] = useState('');
-  const searchRef = useRef(null);
-
-  useEffect(() => {
-    if (searching) searchRef.current?.focus();
-  }, [searching]);
-
-  const visibleChats = chats.filter((chat) =>
-    chat.title.toLowerCase().includes(searchText.toLowerCase()),
-  );
-
   return (
     <aside id="app-sidebar" className={`sidebar${mobileOpen ? ' is-mobile-open' : ''}`}>
       <div className="sidebar-topline">
@@ -659,30 +668,6 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
           <SquarePen size={23} strokeWidth={2} />
           <span>New chat</span>
         </button>
-        {searching ? (
-          <div className="side-search">
-            <Search size={18} />
-            <input
-              ref={searchRef}
-              value={searchText}
-              onChange={(event) => setSearchText(event.target.value)}
-              placeholder="Search conversations"
-              aria-label="Search conversations"
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  setSearching(false);
-                  setSearchText('');
-                }
-              }}
-            />
-            <button className="tiny-icon" onClick={() => { setSearching(false); setSearchText(''); }} aria-label="Close search"><X size={15} /></button>
-          </div>
-        ) : (
-          <button className="side-action" onClick={() => setSearching(true)}>
-            <Search size={18} strokeWidth={1.8} />
-            <span>Search chats</span>
-          </button>
-        )}
         <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')}>
           <ClipboardList size={18} strokeWidth={1.8} />
           <span>Incident Management</span>
@@ -699,9 +684,9 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
 
       <div className="chat-history">
         <div className="history-label"><History size={14} /> Recent conversations</div>
-        {visibleChats.length > 0 ? (
+        {chats.length > 0 ? (
           <div className="chat-list">
-            {visibleChats.map((chat) => (
+            {chats.map((chat) => (
               <button
                 className={`chat-history-item${activeChatId === chat.id ? ' selected' : ''}`}
                 key={chat.id}
@@ -713,7 +698,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
             ))}
           </div>
         ) : (
-          <div className="empty-history">{searchText ? 'No conversations found' : 'Your conversations will appear here'}</div>
+          <div className="empty-history">Your conversations will appear here</div>
         )}
       </div>
       <SidebarArtwork />

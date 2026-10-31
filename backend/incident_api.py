@@ -30,6 +30,17 @@ def dispatch_incident_request(payload: dict, cookie_header: str = "") -> tuple[i
         trusted_payload = dict(payload)
         trusted_payload["current_user"] = user["display_name"] if user else ""
         data = handle_incident_request(trusted_payload)
+        if data.pop("investigation_action", False) and data.get("ticket"):
+            ticket = data.pop("ticket")
+            assignee = ticket.get("assigned_to") or (user["display_name"] if user else "the assignee")
+            try:
+                data["resolution_guidance"] = generate_resolution_guidance(ticket, assignee)
+            except IncidentError as error:
+                LOGGER.warning("investigation guide unavailable status=%d", error.status)
+                return 503, {"error": "The investigation reference could not be loaded."}, None
+            except Exception as error:
+                LOGGER.warning("investigation guide generation failed type=%s", type(error).__name__)
+                return 502, {"error": "Suggested investigation steps could not be generated right now."}, None
         if data.pop("assignment_action", False) and data.get("ticket"):
             assignee = data["ticket"].get("assigned_to") or (user["display_name"] if user else "the assignee")
             try:
