@@ -1,0 +1,106 @@
+[
+  {
+    "ticket_id": "INC0001256",
+    "issue_summary": "Premium total does not match the source record",
+    "issue_description": "The written premium total in the downstream policy reporting data does not reconcile to the source transaction total. Review the linked policies and compare the transaction-level premium values across the available processing layers.",
+    "issue_category": "Premium mismatch",
+    "related_policies": [
+      { "policy_number": "WC-1001", "policy_status": "Active" },
+      { "policy_number": "WC-1002", "policy_status": "Active" }
+    ],
+    "ticket_status": "Unassigned",
+    "assigned_to": null,
+    "created_at": "2026-10-29T14:20:00-04:00",
+    "last_updated": "2026-10-29T14:20:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001255",
+    "issue_summary": "Coverage data is missing from the Gold policy record",
+    "issue_description": "Coverage information expected for this policy was not found in the reporting record. Confirm whether the coverage exists in the upstream policy data and identify where it stopped appearing.",
+    "issue_category": "Missing coverage data",
+    "related_policies": [
+      { "policy_number": "WC-2045", "policy_status": "Active" }
+    ],
+    "ticket_status": "In Progress",
+    "assigned_to": "Sarvesh",
+    "created_at": "2026-10-28T11:10:00-04:00",
+    "last_updated": "2026-10-29T09:45:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001254",
+    "issue_summary": "Policy status does not match its latest transaction",
+    "issue_description": "The current policy status appears inconsistent with its latest recorded transaction. Verify transaction ordering, effective dates, and the status derivation rule before correcting the record.",
+    "issue_category": "Incorrect policy status",
+    "related_policies": [
+      { "policy_number": "WC-3321", "policy_status": "Cancelled" }
+    ],
+    "ticket_status": "Assigned",
+    "assigned_to": "Pratik",
+    "created_at": "2026-10-28T09:35:00-04:00",
+    "last_updated": "2026-10-29T08:15:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001253",
+    "issue_summary": "Duplicate policy transaction found in the reporting layer",
+    "issue_description": "More than one reporting row appears to represent the same policy transaction. Compare source transaction identifiers and revision numbers to determine whether the duplicate originated upstream or during a downstream join.",
+    "issue_category": "Duplicate transaction",
+    "related_policies": [
+      { "policy_number": "WC-1187", "policy_status": "Active" },
+      { "policy_number": "WC-1190", "policy_status": "Active" }
+    ],
+    "ticket_status": "Blocked",
+    "assigned_to": "Saurabh",
+    "created_at": "2026-10-27T16:05:00-04:00",
+    "last_updated": "2026-10-29T10:30:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001252",
+    "issue_summary": "Source policy data did not arrive in the expected batch",
+    "issue_description": "The expected source records were not present in the batch under review. Check batch arrival and ingestion status, then confirm the affected policies with the source owner.",
+    "issue_category": "Missing source data",
+    "related_policies": [],
+    "ticket_status": "Unassigned",
+    "assigned_to": null,
+    "created_at": "2026-10-26T13:40:00-04:00",
+    "last_updated": "2026-10-26T13:40:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001251",
+    "issue_summary": "ADF pipeline failed before the policy batch completed",
+    "issue_description": "The data pipeline reported a failure before the policy batch completed. Review the failed activity, available run details, and the batch checkpoint to determine whether a retry is safe.",
+    "issue_category": "ADF pipeline failure",
+    "related_policies": [
+      { "policy_number": "WC-9012", "policy_status": "Active" }
+    ],
+    "ticket_status": "In Progress",
+    "assigned_to": "Madhu",
+    "created_at": "2026-10-25T10:05:00-04:00",
+    "last_updated": "2026-10-29T12:10:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001250",
+    "issue_summary": "Informatica mapping omitted a required policy field",
+    "issue_description": "A required policy field is absent after the Informatica mapping step. Compare the source field, mapping expression, and target column to identify where the value was dropped.",
+    "issue_category": "Informatica mapping issue",
+    "related_policies": [
+      { "policy_number": "WC-4470", "policy_status": "Active" }
+    ],
+    "ticket_status": "Unassigned",
+    "assigned_to": null,
+    "created_at": "2026-10-24T15:25:00-04:00",
+    "last_updated": "2026-10-28T16:50:00-04:00"
+  },
+  {
+    "ticket_id": "INC0001249",
+    "issue_summary": "Policy record is missing after the downstream load",
+    "issue_description": "The policy is present before the downstream load but is not visible in the reporting output. Compare business keys at each layer and check the load filters and join conditions.",
+    "issue_category": "Missing downstream data",
+    "related_policies": [
+      { "policy_number": "WC-5602", "policy_status": "Active" }
+    ],
+    "ticket_status": "Completed",
+    "assigned_to": "Pratik",
+    "created_at": "2026-10-23T08:55:00-04:00",
+    "last_updated": "2026-10-27T14:20:00-04:00"
+  }
+]

@@ -1,16 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
+  BadgeCheck,
   CalendarDays,
+  ChartNoAxesColumnIncreasing,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  ClipboardList,
   DollarSign,
   Timer,
   History,
   Menu,
+  PartyPopper,
   Search,
   Sparkles,
   SquarePen,
   X,
 } from 'lucide-react';
+import { DashboardPage, UserAccountMenu } from './Dashboards.jsx';
+import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
@@ -33,14 +42,14 @@ const welcomePrompts = [
 
 const activityCopy = {
   generating: [
-    'Thinking through your question',
-    'Finding the right information',
-    'Preparing your query',
+    'Understanding your request',
+    'Checking the available data context',
+    'Preparing SQL for your review',
   ],
   running: [
-    'Running your query',
-    'Gathering your results',
-    'Organizing your results',
+    'Executing the approved query',
+    'Retrieving matching records',
+    'Preparing your results',
   ],
 };
 
@@ -57,11 +66,24 @@ function ActivityStatus({ status }) {
 
   return (
     <div className={`activity-status activity-${status}`} role="status" aria-live="polite">
-      <span className="activity-indicator" aria-hidden="true"><i /><i /><i /></span>
       <span key={messageIndex} className="activity-label">{messages[messageIndex]}</span>
       <span className="activity-ellipsis" aria-hidden="true"><i /><i /><i /></span>
     </div>
   );
+}
+
+function ElapsedTimer({ startedAt }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(interval);
+  }, []);
+  return <span className="query-elapsed" aria-label={`Elapsed ${formatDuration(now - startedAt)}`}><Timer size={13} strokeWidth={1.8} />{formatDuration(now - startedAt)}</span>;
+}
+
+function ResponseTime({ durationMs }) {
+  if (durationMs === null || durationMs === undefined) return null;
+  return <span className="response-time"><Timer size={13} strokeWidth={1.8} />{formatDuration(durationMs)}</span>;
 }
 
 function formatDuration(durationMs) {
@@ -333,9 +355,99 @@ function QueryResultsTable({ result }) {
   );
 }
 
-function QueryResultView({ question, result }) {
+function QueryResultView({ question, result, responseDurationMs }) {
   const summary = getPolicySummary(question, result);
-  return summary ? <PolicySummaryCard summary={summary} /> : <QueryResultsTable result={result} />;
+  const timedResult = { ...result, duration_ms: responseDurationMs ?? result.duration_ms };
+  return summary ? <><ResponseTime durationMs={responseDurationMs ?? result.duration_ms} /><PolicySummaryCard summary={summary} /></> : <QueryResultsTable result={timedResult} />;
+}
+
+const incidentChatStatuses = ['In Progress', 'Blocked', 'Waiting for Info', 'Completed'];
+const incidentChatAssignees = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh'];
+
+function ProgressiveSelect({ label, value, options, placeholder, onChange }) {
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef(null);
+  useEffect(() => {
+    function dismiss(event) {
+      if (!pickerRef.current?.contains(event.target) || event.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', dismiss);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', dismiss);
+    };
+  }, []);
+
+  return <label className="incident-chat-picker-label"><span>{label}</span><div className="incident-chat-picker" ref={pickerRef}>
+    <button type="button" className={`incident-chat-picker-trigger${open ? ' is-open' : ''}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+      <span className={value ? '' : 'is-placeholder'}>{value || placeholder}</span><ChevronDown size={15} />
+    </button>
+    {open && <div className="incident-chat-picker-menu" role="listbox" aria-label={label}>{options.map((option) => <button type="button" role="option" aria-selected={value === option} className={value === option ? 'is-selected' : ''} key={option} onClick={() => { onChange(option); setOpen(false); }}><span>{option === 'Waiting for Info' ? 'Request more access' : option}</span>{value === option && <Check size={15} />}</button>)}</div>}
+  </div></label>;
+}
+
+function IncidentActionFeedback({ feedback }) {
+  if (!feedback) return null;
+  const Icon = feedback.icon === 'blocked' ? CircleAlert
+    : feedback.icon === 'completed' ? BadgeCheck
+      : feedback.icon === 'error' ? CircleAlert
+        : PartyPopper;
+  return <div className={`incident-action-feedback tone-${feedback.tone || 'blue'}`} role={feedback.tone === 'red' ? 'alert' : 'status'}>
+    <span className="incident-action-feedback-icon"><Icon size={17} strokeWidth={2} /></span>
+    <span><strong>{feedback.title}</strong>{feedback.detail && <small>{feedback.detail}</small>}</span>
+  </div>;
+}
+
+function IncidentUpdatingStatus({ startedAt }) {
+  return <div className="incident-update-status" role="status" aria-live="polite"><span aria-hidden="true"><i /><i /><i /></span>Saving the ticket update and syncing activity…<ElapsedTimer startedAt={startedAt} /></div>;
+}
+
+function IncidentConversationResult({ result, currentUser, onAction }) {
+  const [editors, setEditors] = useState({});
+  const [fieldSelections, setFieldSelections] = useState({});
+  if (!result) return null;
+  if (result.kind === 'clarification') return <p className="incident-chat-note">{result.message}</p>;
+  if (result.kind === 'action_complete') return <><IncidentActionFeedback feedback={{ tone: 'green', icon: 'completed', title: result.message || 'Ticket updated successfully.', detail: result.ticket && `${result.ticket.ticket_id} · ${result.ticket.ticket_status} · ${result.ticket.assigned_to || 'Unassigned'}` }} /><IncidentResolutionGuide guide={result.resolution_guidance} error={result.resolution_guidance_error} /></>;
+
+  function ticketCard(ticket) {
+    const canManage = currentUser === 'Admin' || ticket.assigned_to === currentUser;
+    const canDecline = currentUser && (!ticket.assigned_to || canManage);
+    const editor = editors[ticket.ticket_id];
+    const setEditor = (value) => setEditors((current) => ({ ...current, [ticket.ticket_id]: value }));
+    return <article className="incident-chat-ticket" key={ticket.ticket_id}>
+      <header><strong>{ticket.ticket_id}</strong><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header>
+      <h4>{ticket.issue_summary}</h4>
+      <p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p>
+      {ticket.related_policies?.length > 0 && <small className="incident-chat-policies">Policies: {ticket.related_policies.map((policy) => `${policy.policy_number} (${policy.policy_status || 'Unknown'})`).join(', ')}</small>}
+      {(currentUser && (!ticket.assigned_to || canManage)) && <div className="incident-chat-ticket-actions">
+        {!ticket.assigned_to && <button type="button" onClick={() => onAction(ticket, 'assign_to_me')}>Assign to me</button>}
+        {canManage && <button type="button" onClick={() => setEditor(editor === 'status' ? '' : 'status')}>Update status</button>}
+        {canManage && <button type="button" onClick={() => setEditor(editor === 'assignee' ? '' : 'assignee')}>Reassign</button>}
+        {canManage && <button type="button" onClick={() => onAction(ticket, 'unassign')}>Unassign</button>}
+        {canDecline && <button type="button" className="incident-chat-decline" onClick={() => onAction(ticket, 'decline')}>Decline</button>}
+      </div>}
+      {editor === 'status' && <div className="incident-chat-inline-editor"><ProgressiveSelect label="Status" value={fieldSelections[`status-${ticket.ticket_id}`] || 'In Progress'} options={incidentChatStatuses} onChange={(value) => setFieldSelections((current) => ({ ...current, [`status-${ticket.ticket_id}`]: value }))} /><button type="button" onClick={() => { onAction(ticket, 'set_status', { status: fieldSelections[`status-${ticket.ticket_id}`] || 'In Progress' }); setEditor(''); }}>Save status</button></div>}
+      {editor === 'assignee' && <div className="incident-chat-inline-editor"><ProgressiveSelect label="Assign to" value={fieldSelections[`assignee-${ticket.ticket_id}`] ?? ticket.assigned_to ?? ''} placeholder="Select teammate" options={incidentChatAssignees} onChange={(value) => setFieldSelections((current) => ({ ...current, [`assignee-${ticket.ticket_id}`]: value }))} /><button type="button" onClick={() => { const value = fieldSelections[`assignee-${ticket.ticket_id}`] ?? ticket.assigned_to; if (value) onAction(ticket, 'assign_to_user', { assignee: value }); setEditor(''); }}>Save assignment</button></div>}
+    </article>;
+  }
+
+  if (result.kind === 'status_selection') {
+    const ticket = result.ticket;
+    return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}</p><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><div className="incident-chat-choice-list">{result.statuses.map((status) => <button type="button" key={status} className={editors.selectedStatus === status ? 'selected' : ''} onClick={() => setEditors((current) => ({ ...current, selectedStatus: status }))}><i />{status === 'Waiting for Info' ? 'Request more access' : status}</button>)}</div><button className="incident-chat-primary" type="button" disabled={!editors.selectedStatus} onClick={() => onAction(ticket, 'set_status', { status: editors.selectedStatus })}>Save status</button></section>;
+  }
+
+  if (result.kind === 'assignee_selection') {
+    const ticket = result.ticket;
+    return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}</p><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><ProgressiveSelect label="Assign to" value={editors.assignee || ''} placeholder="Select a teammate" options={result.assignees} onChange={(assignee) => setEditors((current) => ({ ...current, assignee }))} /><button className="incident-chat-primary" type="button" disabled={!editors.assignee} onClick={() => onAction(ticket, ticket.assigned_to ? 'assign_to_user' : 'acknowledge_assign', { assignee: editors.assignee })}>Save assignment</button></section>;
+  }
+
+  function ticketCardWithoutActions(ticket) {
+    return <article className="incident-chat-ticket" key={ticket.ticket_id}><header><strong>{ticket.ticket_id}</strong><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header><h4>{ticket.issue_summary}</h4><p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p></article>;
+  }
+
+  if (result.kind === 'ticket_list') return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}{result.tickets?.length ? ` ${result.tickets.length} ticket${result.tickets.length === 1 ? '' : 's'} found.` : ''}</p>{result.tickets?.length ? <div className="incident-chat-ticket-list">{result.tickets.map(ticketCard)}</div> : <div className="incident-chat-empty">No matching incident tickets were found.</div>}</section>;
+  return null;
 }
 
 function chooseWelcomePrompt(previousHeading) {
@@ -379,7 +491,7 @@ function SidebarArtwork() {
   );
 }
 
-function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen }) {
+function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, currentPage, setCurrentPage }) {
   const [searching, setSearching] = useState(false);
   const [searchText, setSearchText] = useState('');
   const searchRef = useRef(null);
@@ -427,6 +539,14 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen }
             <span>Search chats</span>
           </button>
         )}
+        <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')}>
+          <ClipboardList size={18} strokeWidth={1.8} />
+          <span>Incident Management</span>
+        </button>
+        <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')}>
+          <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
+          <span>Policy Dashboard</span>
+        </button>
       </nav>
 
       <div className="chat-history">
@@ -495,11 +615,13 @@ function Composer({ value, setValue, onSend, placeholder, compact = false }) {
 }
 
 function App() {
+  const [currentUser, setCurrentUser] = useState(null);
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
   const [draft, setDraft] = useState('');
   const [welcomePrompt, setWelcomePrompt] = useState(() => chooseWelcomePrompt());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState('chat');
   const [accessGate, setAccessGate] = useState(null);
   const [accessCode, setAccessCode] = useState('');
   const [accessError, setAccessError] = useState('');
@@ -525,6 +647,15 @@ function App() {
   }, []);
 
   useEffect(() => {
+    fetch('/api/incidents?action=session')
+      .then(async (response) => {
+        const payload = await readApiResponse(response);
+        if (response.ok) setCurrentUser(payload.current_user || null);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     function onKeyDown(event) {
       if (event.key === 'Escape') setMobileSidebarOpen(false);
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -541,6 +672,7 @@ function App() {
   }, [activeChat?.messages]);
 
   function startNewChat() {
+    setCurrentPage('chat');
     setActiveChatId(null);
     setDraft('');
     setMobileSidebarOpen(false);
@@ -548,6 +680,7 @@ function App() {
   }
 
   function selectChat(chatId) {
+    setCurrentPage('chat');
     setActiveChatId(chatId);
     setMobileSidebarOpen(false);
   }
@@ -571,8 +704,35 @@ function App() {
       if (!response.ok) throw new Error(payload.error || 'Could not verify the access code.');
       setAccessCode('');
       setAccessGate(null);
+      const identityResponse = await fetch('/api/incidents?action=session');
+      const identity = await readApiResponse(identityResponse);
+      if (identityResponse.ok) setCurrentUser(identity.current_user || null);
     } catch (error) {
       setAccessError(error.message || 'Could not connect to the application server.');
+    }
+  }
+
+  async function loginIncidentAccount(user) {
+    const response = await fetch('/api/incidents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login', user }),
+    });
+    const payload = await readApiResponse(response);
+    if (!response.ok) throw new Error(payload.error || 'Could not sign in to this account.');
+    setCurrentUser(payload.current_user);
+    return payload;
+  }
+
+  async function logoutIncidentAccount() {
+    try {
+      await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'logout' }),
+      });
+    } finally {
+      setCurrentUser(null);
     }
   }
 
@@ -582,7 +742,7 @@ function App() {
     const id = activeChatId ?? crypto.randomUUID();
     const userMessage = { id: crypto.randomUUID(), role: 'user', content };
     const assistantId = crypto.randomUUID();
-    const assistantMessage = { id: assistantId, role: 'assistant', question: content, content: '', status: 'generating' };
+    const assistantMessage = { id: assistantId, role: 'assistant', question: content, content: '', status: 'generating', startedAt: Date.now() };
 
     setChats((current) => {
       const existing = current.find((chat) => chat.id === id);
@@ -596,6 +756,25 @@ function App() {
     setActiveChatId(id);
     setDraft('');
     try {
+      const intentResponse = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'chat', current_user: currentUser, message: content }),
+      });
+      const incidentPayload = await readApiResponse(intentResponse);
+      if (!intentResponse.ok && incidentPayload.kind !== 'not_incident') {
+        if (incidentPayload.access_required) setAccessGate(incidentPayload.error || 'Enter the application access code to continue.');
+        throw new Error(incidentPayload.error || 'The incident assistant could not process that request.');
+      }
+      if (incidentPayload.kind !== 'not_incident') {
+        updateMessage(id, assistantId, {
+          content: incidentPayload.message || incidentPayload.summary || '',
+          status: 'completed',
+          responseDurationMs: Date.now() - assistantMessage.startedAt,
+          incidentResult: incidentPayload,
+        });
+        return;
+      }
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -617,12 +796,75 @@ function App() {
       updateMessage(id, assistantId, {
         content: error.message || 'Could not reach the assistant service. Start the backend and try again.',
         status: 'error',
+        responseDurationMs: Date.now() - assistantMessage.startedAt,
       });
     }
   }
 
+  async function mutateIncidentFromChat(chatId, message, ticket, operation, extra = {}) {
+    const startedAt = Date.now();
+    const actionId = crypto.randomUUID();
+    const ticketId = ticket.ticket_id;
+    const requestedStatus = extra.status === 'Waiting for Info' ? 'Request more access' : extra.status;
+    const assignee = extra.assignee || (operation === 'assign_to_me' ? currentUser : '');
+    const actionText = operation === 'set_status' ? `Update ${ticketId} status to ${requestedStatus}`
+      : operation === 'assign_to_me' || operation === 'acknowledge_assign' ? `Assign ${ticketId} to ${assignee || 'the selected teammate'}`
+        : operation === 'assign_to_user' ? `Reassign ${ticketId} to ${assignee || 'the selected teammate'}`
+          : operation === 'unassign' ? `Unassign ${ticketId}`
+            : operation === 'decline' ? `Decline ${ticketId}`
+              : `Update ${ticketId}`;
+    const progressText = operation === 'set_status'
+      ? `Updating ${ticketId} to ${requestedStatus}.`
+      : operation === 'decline' ? `Declining ${ticketId}.` : `Updating assignment for ${ticketId}.`;
+    const actionUserMessage = { id: crypto.randomUUID(), role: 'user', content: actionText };
+    const actionAssistantMessage = { id: actionId, role: 'assistant', content: progressText, status: 'incident_updating', startedAt };
+    setChats((current) => current.map((chat) => chat.id === chatId
+      ? { ...chat, messages: [...chat.messages, actionUserMessage, actionAssistantMessage] }
+      : chat));
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mutate', current_user: currentUser, ticket_id: ticket.ticket_id, operation, ...extra }),
+      });
+      const payload = await readApiResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'The ticket could not be updated.');
+      const status = payload.ticket?.ticket_status || (operation === 'decline' ? 'Declined' : 'Updated');
+      const tone = status === 'Blocked' || status === 'Declined' ? 'red' : status === 'Completed' ? 'green' : status === 'Waiting for Info' ? 'purple' : 'blue';
+      const icon = status === 'Blocked' || status === 'Declined' ? 'blocked' : status === 'Completed' ? 'completed' : 'party';
+      const outcome = operation === 'set_status' ? `${ticketId} updated successfully — ${status === 'Waiting for Info' ? 'Request more access' : status}.`
+        : operation === 'decline' ? `${ticketId} was declined.`
+          : operation === 'unassign' ? `${ticketId} is now unassigned.`
+            : `${ticketId} assigned successfully${payload.ticket?.assigned_to ? ` to ${payload.ticket.assigned_to}` : ''}.`;
+      const detail = payload.ticket
+        ? `${payload.ticket.ticket_id} · ${payload.ticket.ticket_status} · ${payload.ticket.assigned_to || 'Unassigned'}`
+        : operation === 'decline' ? 'Removed from the active ticket queue.' : '';
+      setChats((current) => current.map((chat) => chat.id !== chatId ? chat : {
+        ...chat,
+        messages: chat.messages.map((item) => {
+          if (item.id === actionId) return { ...item, content: '', status: 'completed', responseDurationMs: Date.now() - startedAt, incidentFeedback: { tone, icon, title: outcome, detail, resolutionGuide: payload.resolution_guidance, resolutionGuideError: payload.resolution_guidance_error } };
+          if (item.id !== message.id) return item;
+          const prior = item.incidentResult || {};
+          const oldTickets = prior.tickets || (prior.ticket ? [prior.ticket] : []);
+          const tickets = payload.ticket
+            ? oldTickets.some((row) => row.ticket_id === ticketId)
+              ? oldTickets.map((row) => row.ticket_id === ticketId ? payload.ticket : row)
+              : [...oldTickets, payload.ticket]
+            : oldTickets.filter((row) => row.ticket_id !== ticketId);
+          const nextResult = prior.kind === 'ticket_list'
+            ? { ...prior, tickets, activity: payload.activity || prior.activity }
+            : { kind: 'ticket_list', summary: 'Current ticket details:', tickets: payload.ticket ? [payload.ticket] : [], activity: payload.activity || prior.activity };
+          return { ...item, incidentResult: nextResult };
+        }),
+      }));
+    } catch (error) {
+      updateMessage(chatId, actionId, { content: '', status: 'error', responseDurationMs: Date.now() - startedAt, incidentFeedback: { tone: 'red', icon: 'error', title: error.message || 'The ticket could not be updated.', detail: `No change was confirmed for ${ticketId}.` } });
+    }
+  }
+
   async function executeQuery(chatId, message) {
-    updateMessage(chatId, message.id, { status: 'running', content: '' });
+    const startedAt = Date.now();
+    updateMessage(chatId, message.id, { status: 'running', content: '', queryStartedAt: startedAt });
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -631,9 +873,9 @@ function App() {
       });
       const payload = await readApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'Databricks query failed.');
-      updateMessage(chatId, message.id, { status: 'completed', result: payload });
+      updateMessage(chatId, message.id, { status: 'completed', result: payload, responseDurationMs: Date.now() - startedAt });
     } catch (error) {
-      updateMessage(chatId, message.id, { status: 'error', content: error.message || 'Databricks could not complete the query.' });
+      updateMessage(chatId, message.id, { status: 'error', content: error.message || 'Databricks could not complete the query.', responseDurationMs: Date.now() - startedAt });
     }
   }
 
@@ -678,6 +920,8 @@ function App() {
         setActiveChatId={selectChat}
         onNewChat={startNewChat}
         mobileOpen={mobileSidebarOpen}
+        currentPage={currentPage}
+        setCurrentPage={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }}
       />
 
       <main className="main-panel">
@@ -691,7 +935,11 @@ function App() {
         >
           <Menu size={21} strokeWidth={1.8} />
         </button>
-        {!activeChat ? (
+        {currentPage !== 'chat' ? (
+          <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} />
+        ) : !activeChat ? (
+          <>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
           <section className="welcome-view">
             <div className="welcome-content">
               <h2 key={welcomePrompt.heading}>{welcomePrompt.heading}</h2>
@@ -705,7 +953,10 @@ function App() {
               </div>
             </div>
           </section>
+          </>
         ) : (
+          <>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
           <section className="conversation-view">
             <div className="conversation-scroll">
               <div className="message-list">
@@ -714,7 +965,12 @@ function App() {
                     {message.role === 'assistant' && <span className="assistant-avatar"><Sparkles size={14} /></span>}
                     <div className="message-content">
                       <div>{message.content}</div>
-                      {message.status === 'generating' && <ActivityStatus status="generating" />}
+                      {message.status === 'generating' && <div className="activity-progress-row"><ActivityStatus status="generating" /><ElapsedTimer startedAt={message.startedAt || Date.now()} /></div>}
+                      {message.status === 'incident_updating' && <IncidentUpdatingStatus startedAt={message.startedAt || Date.now()} />}
+                      {message.incidentResult && <ResponseTime durationMs={message.responseDurationMs} />}
+                      {message.incidentFeedback && <><ResponseTime durationMs={message.responseDurationMs} /><IncidentActionFeedback feedback={message.incidentFeedback} /><IncidentResolutionGuide guide={message.incidentFeedback.resolutionGuide} error={message.incidentFeedback.resolutionGuideError} /></>}
+                      {message.incidentResult && <IncidentConversationResult result={message.incidentResult} currentUser={currentUser} onAction={(ticket, operation, extra) => mutateIncidentFromChat(activeChat.id, message, ticket, operation, extra)} />}
+                      {message.incidentBusyTicket && <ActivityStatus status="running" />}
                       {message.sql && (
                         <section className="sql-review" aria-label="Generated SQL review">
                           <div className="sql-review-heading">
@@ -730,11 +986,11 @@ function App() {
                               Approve &amp; run query
                             </button>
                           )}
-                          {message.status === 'running' && <div className="query-running"><ActivityStatus status="running" /></div>}
+                          {message.status === 'running' && <div className="query-running"><ActivityStatus status="running" /><ElapsedTimer startedAt={message.queryStartedAt || Date.now()} /></div>}
                         </section>
                       )}
                       {message.result && (
-                        <QueryResultView question={message.question} result={message.result} />
+                        <QueryResultView question={message.question} result={message.result} responseDurationMs={message.responseDurationMs} />
                       )}
                     </div>
                   </article>
@@ -746,6 +1002,7 @@ function App() {
               <Composer value={draft} setValue={setDraft} onSend={() => sendMessage()} placeholder="Message..." compact />
             </div>
           </section>
+          </>
         )}
       </main>
     </div>
