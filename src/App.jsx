@@ -12,6 +12,7 @@ import {
   DollarSign,
   Timer,
   History,
+  BookOpenText,
   Menu,
   PartyPopper,
   Search,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import { DashboardPage, UserAccountMenu } from './Dashboards.jsx';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
+import { HowItWorksPage } from './HowItWorksPage.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
@@ -415,8 +417,14 @@ function QueryResultsTable({ result }) {
           <span>{result.row_count} {result.row_count === 1 ? 'row' : 'rows'}</span>
         </div>
         <div className="results-heading-actions">
-          <button type="button" className={`copy-results-button${copyState === 'copied' ? ' is-copied' : ''}`} onClick={copyResults} aria-live="polite">
-            {copyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}{copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy results'}
+          <button
+            type="button"
+            className={`copy-results-button${copyState === 'copied' ? ' is-copied' : ''}`}
+            onClick={copyResults}
+            aria-label={copyState === 'copied' ? 'Results copied' : copyState === 'error' ? 'Could not copy results' : 'Copy results'}
+            title={copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy results'}
+          >
+            {copyState === 'copied' ? <Check size={15} /> : <Copy size={15} />}
           </button>
           <span className="results-duration"><Timer size={13} strokeWidth={1.8} />{formatDuration(result.duration_ms)}</span>
         </div>
@@ -683,6 +691,10 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
           <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
           <span>Policy Dashboard</span>
         </button>
+        <button className={`side-action${currentPage === 'guide' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('guide')}>
+          <BookOpenText size={18} strokeWidth={1.8} />
+          <span>How this works</span>
+        </button>
       </nav>
 
       <div className="chat-history">
@@ -811,6 +823,14 @@ function App() {
     setCurrentPage('chat');
     setActiveChatId(null);
     setDraft('');
+    setMobileSidebarOpen(false);
+    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading, current.placeholder));
+  }
+
+  function openPromptInChat(prompt) {
+    setCurrentPage('chat');
+    setActiveChatId(null);
+    setDraft(prompt);
     setMobileSidebarOpen(false);
     setWelcomePrompt((current) => chooseWelcomePrompt(current.heading, current.placeholder));
   }
@@ -1098,7 +1118,12 @@ function App() {
         >
           <Menu size={21} strokeWidth={1.8} />
         </button>
-        {currentPage !== 'chat' ? (
+        {currentPage === 'guide' ? (
+          <>
+            <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
+            <HowItWorksPage onUsePrompt={openPromptInChat} />
+          </>
+        ) : currentPage !== 'chat' ? (
           <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} />
         ) : !activeChat ? (
           <>
