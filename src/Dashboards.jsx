@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, ArrowUpRight, BadgeCheck, CalendarDays,
+  Activity, AlertCircle, ArrowLeft, ArrowUpRight, BadgeCheck, CalendarDays,
   Check, ChevronDown, ChevronRight, CircleDashed, Clock3, FileWarning, Filter,
   Hand, LogIn, LogOut, MessageSquareText, Plus, Search, ShieldAlert, Sparkles,
   Ticket, UserRound, X,
 } from 'lucide-react';
-import incidentTicketSeed from './data/incident-tickets.json';
+import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 
-const incidentStorageKey = 'progressive-poc-incident-management-v5';
-const assignablePeople = ['Pratik', 'Sarvesh'];
+const accountNames = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh', 'Admin'];
+const assignablePeople = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh'];
 const ownerTicketStatuses = [
   { value: 'In Progress', label: 'In Progress', description: 'Work is underway on this incident.' },
   { value: 'Blocked', label: 'Blocked', description: 'Work cannot continue because of a blocker.' },
@@ -16,17 +16,9 @@ const ownerTicketStatuses = [
   { value: 'Completed', label: 'Completed', description: 'The incident has been resolved.' },
 ];
 
-function loadIncidentState() {
-  if (typeof window === 'undefined') return { tickets: incidentTicketSeed, activity: [] };
-  try {
-    const stored = window.localStorage.getItem(incidentStorageKey);
-    if (!stored) return { tickets: incidentTicketSeed, activity: [] };
-    const parsed = JSON.parse(stored);
-    if (!Array.isArray(parsed.tickets) || !Array.isArray(parsed.activity)) throw new Error('Invalid local incident state');
-    return parsed;
-  } catch {
-    return { tickets: incidentTicketSeed, activity: [] };
-  }
+async function readIncidentResponse(response) {
+  try { return await response.json(); }
+  catch { return { error: 'The incident service returned an unreadable response.' }; }
 }
 
 function formatIncidentDate(value) {
@@ -56,6 +48,25 @@ function formatActivityTime(value) {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
+function IncidentLoading() {
+  const stages = ['Connecting to incident data', 'Retrieving ticket details', 'Preparing your dashboard'];
+  const [stage, setStage] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setStage((current) => (current + 1) % stages.length), 1700);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return <section className="incident-loading-card" role="status" aria-live="polite">
+    <span className="incident-loading-mark" aria-hidden="true"><span /></span>
+    <div className="incident-loading-copy">
+      <strong>{stages[stage]}<span className="incident-loading-ellipsis" aria-hidden="true">…</span></strong>
+      <span>Securely loading the latest ticket and activity information.</span>
+    </div>
+    <span className="incident-loading-progress" aria-hidden="true"><i style={{ '--loading-stage': stage }} /></span>
+  </section>;
+}
+
 const shortcuts = [
   [Search, 'Find similar past incidents', 'Search historical issues and resolutions'],
   [Ticket, 'Create a new ticket', 'Raise a Remedy ticket for this issue'],
@@ -63,14 +74,10 @@ const shortcuts = [
   [Hand, 'Analyze policy data', 'Check data and identify discrepancies'],
 ];
 
-function DemoTag() {
-  return <span className="dashboard-demo-tag"><span /> Demo data</span>;
-}
-
 function DashboardHeader({ title, subtitle, onCreate }) {
   return (
     <header className="dashboard-header">
-      <div><div className="dashboard-title-line"><h1>{title}</h1><DemoTag /></div><p>{subtitle}</p></div>
+      <div><div className="dashboard-title-line"><h1>{title}</h1></div><p>{subtitle}</p></div>
       {onCreate && <button className="dashboard-primary-button" onClick={onCreate}><Plus size={17} />Create New Ticket</button>}
     </header>
   );
@@ -237,6 +244,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
     : modal.type === 'actions' ? 'Ticket actions'
       : modal.type === 'assign' ? (modal.acknowledge ? 'Acknowledge ticket' : 'Assign ticket')
         : modal.type === 'status' ? 'Update ticket status'
+        : modal.type === 'resolution_guide' ? 'Suggested investigation'
         : modal.type === 'decline' ? 'Decline this request?'
           : modal.type === 'login' ? 'Sign in to manage this ticket'
           : 'Demo preview';
@@ -256,9 +264,21 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
   }
 
   const isTicketOwner = Boolean(currentUser && ticket?.assigned_to === currentUser);
-  const canTakeTicketAction = Boolean(currentUser && ticket && (!ticket.assigned_to || isTicketOwner));
+  const isAdmin = currentUser === 'Admin';
+  const canManageTicket = Boolean(isTicketOwner || isAdmin);
+  const canTakeTicketAction = Boolean(currentUser && ticket && (!ticket.assigned_to || canManageTicket));
+  const hasPreviousModal = ['actions', 'assign', 'status', 'decline', 'login'].includes(modal.type);
+
+  function goBack() {
+    if (modal.type === 'actions' || modal.type === 'login') {
+      onModal({ type: 'details', ticket });
+      return;
+    }
+    onModal({ type: 'actions', ticket });
+  }
 
   return <div className="dashboard-modal-backdrop" role="presentation" onClick={onClose}><section className={`dashboard-modal${modal.type === 'details' ? ' dashboard-ticket-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title" onClick={(event) => event.stopPropagation()}>
+    {hasPreviousModal && <button className="dashboard-modal-back" type="button" onClick={goBack} aria-label={modal.type === 'actions' || modal.type === 'login' ? 'Back to ticket details' : 'Back to ticket actions'}><ArrowLeft size={18} /><span>Back</span></button>}
     <button className="dashboard-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
     <span className="dashboard-modal-icon"><Sparkles size={20} /></span>
     <h2 id="dashboard-modal-title">{title}</h2>
@@ -267,17 +287,16 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
       <div className="ticket-detail-description"><span>Issue summary</span><p>{ticket.issue_summary}</p><span>Details</span><p>{ticket.issue_description || ticket.issue_summary}</p></div>
       <div className="ticket-detail-section"><h3>Related policies <span>{relatedPolicies.length}</span></h3>{relatedPolicies.length ? <div className="ticket-policy-list">{relatedPolicies.map((policy) => <div className="ticket-policy-item" key={policy.policy_number}><strong>{policy.policy_number}</strong><StatusPill status={policy.policy_status || 'Unknown'} /></div>)}</div> : <p className="ticket-detail-muted">No policy is linked to this incident.</p>}</div>
       <div className="ticket-detail-grid"><div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatIncidentTimestamp(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatIncidentTimestamp(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatIncidentTimestamp(ticket.acknowledged_at)}</strong></div>}</div>
-      <div className="ticket-detail-footer"><button className="dashboard-modal-secondary" onClick={onClose}>Close</button>{!currentUser ? <button className="dashboard-modal-done" onClick={() => onModal({ type: 'login', ticket })}><LogIn size={15} />Log in to take action</button> : canTakeTicketAction ? <button className="dashboard-modal-done" onClick={() => onModal({ type: 'actions', ticket })}><Activity size={15} />Take action</button> : <span className="ticket-owner-note">Only {ticket.assigned_to} can update this ticket.</span>}</div>
+      <div className="ticket-detail-footer"><button className="dashboard-modal-secondary" onClick={onClose}>Close</button>{!currentUser ? <button className="dashboard-modal-done" onClick={() => onModal({ type: 'login', ticket })}><LogIn size={15} />Log in to take action</button> : canTakeTicketAction ? <button className="dashboard-modal-done" onClick={() => onModal({ type: 'actions', ticket })}><Activity size={15} />Take action</button> : null}</div>
     </>}
     {modal.type === 'actions' && <>
       <p className="dashboard-modal-intro">Choose what to do with <strong>{ticket.ticket_id}</strong>.</p>
       <div className="ticket-action-choices">
         {!ticket.assigned_to && <button className="ticket-action-choice-primary" onClick={() => onModal({ type: 'assign', ticket, acknowledge: true })}><Check size={17} /><span><strong>Acknowledge</strong><small>Accept this ticket and assign an owner.</small></span><ChevronRight size={16} /></button>}
-        {isTicketOwner && <button className="ticket-action-choice-primary" onClick={() => onModal({ type: 'status', ticket })}><Activity size={17} /><span><strong>Update status</strong><small>Set progress, request info, mark blocked, or complete it.</small></span><ChevronRight size={16} /></button>}
-        {isTicketOwner && <button onClick={() => onModal({ type: 'assign', ticket, acknowledge: false })}><UserRound size={17} /><span><strong>Reassign</strong><small>Choose a new owner for this ticket.</small></span><ChevronRight size={16} /></button>}
-        {isTicketOwner && <button onClick={() => { onUnassign(ticket); onClose(); }}><X size={16} /><span><strong>Unassign</strong><small>Return this ticket to the unassigned queue.</small></span><ChevronRight size={16} /></button>}
+        {canManageTicket && <button className="ticket-action-choice-primary" onClick={() => onModal({ type: 'status', ticket })}><Activity size={17} /><span><strong>Update status</strong><small>Set progress, request info, mark blocked, or complete it.</small></span><ChevronRight size={16} /></button>}
+        {canManageTicket && <button onClick={() => onModal({ type: 'assign', ticket, acknowledge: false })}><UserRound size={17} /><span><strong>Reassign</strong><small>Choose a new owner for this ticket.</small></span><ChevronRight size={16} /></button>}
+        {canManageTicket && <button onClick={() => { onUnassign(ticket); onClose(); }}><X size={16} /><span><strong>Unassign</strong><small>Return this ticket to the unassigned queue.</small></span><ChevronRight size={16} /></button>}
         {canTakeTicketAction && <button className="ticket-action-choice-decline" onClick={() => onModal({ type: 'decline', ticket })}><X size={16} /><span><strong>Decline request</strong><small>Remove it from the active queue and record the decision.</small></span><ChevronRight size={16} /></button>}
-        {!canTakeTicketAction && <p className="ticket-owner-note">{currentUser ? `This ticket is assigned to ${ticket.assigned_to}.` : 'Sign in to acknowledge an unassigned ticket.'}</p>}
       </div>
     </>}
     {modal.type === 'assign' && <form className="ticket-assign-form" onSubmit={confirmAssignment}>
@@ -292,8 +311,9 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
       <div className="dashboard-modal-actions"><button type="button" className="dashboard-modal-secondary" onClick={onClose}>Cancel</button><button type="submit" className="dashboard-modal-done" disabled={!assignee}><Check size={15} />{modal.acknowledge ? 'Acknowledge & assign' : 'Save assignment'}</button></div>
     </form>}
     {modal.type === 'status' && <form className="ticket-status-form" onSubmit={confirmStatus}><p>Choose the current status for <strong>{ticket.ticket_id}</strong>.</p><div className="ticket-status-choices" role="radiogroup" aria-label="Ticket status">{ownerTicketStatuses.map((status) => <button type="button" role="radio" aria-checked={selectedStatus === status.value} className={selectedStatus === status.value ? 'selected' : ''} key={status.value} onClick={() => setSelectedStatus(status.value)}><span className={`status-choice-dot status-${status.value.toLowerCase().replaceAll(' ', '-')}`} /><span><strong>{status.label}</strong><small>{status.description}</small></span>{selectedStatus === status.value && <Check size={15} />}</button>)}</div><div className="dashboard-modal-actions"><button type="button" className="dashboard-modal-secondary" onClick={onClose}>Cancel</button><button type="submit" className="dashboard-modal-done" disabled={!selectedStatus}><Check size={15} />Save status</button></div></form>}
-    {modal.type === 'login' && <><p>Select one of the demo accounts to manage this ticket.</p><div className="demo-login-options">{['Pratik', 'Sarvesh'].map((person) => <button key={person} onClick={() => { onLogin(person); onModal({ type: 'details', ticket }); }}><span className="user-account-avatar">{person[0]}</span><strong>Log in as {person}</strong><ChevronRight size={15} /></button>)}</div></>}
+    {modal.type === 'login' && <><p>Sign in with your individual account from the profile menu in the upper-right corner to manage this ticket.</p><button className="dashboard-modal-secondary" onClick={onClose}>Close</button></>}
     {modal.type === 'decline' && <><p>Decline request <strong>{ticket.ticket_id}</strong>? It will leave the active queue and the decision will be recorded in Recent Activity.</p><div className="dashboard-modal-actions"><button className="dashboard-modal-secondary" onClick={onClose}>Cancel</button><button className="dashboard-modal-decline" onClick={() => { onDecline(ticket); onClose(); }}>Decline request</button></div></>}
+    {modal.type === 'resolution_guide' && <><IncidentResolutionGuide guide={modal.guide} error={modal.guideError} /><div className="dashboard-modal-actions"><button className="dashboard-modal-secondary" onClick={onClose}>Close</button></div></>}
     {(!modal.type || modal.type === 'notice') && <><p>{message}</p><button className="dashboard-modal-done" onClick={onClose}><Check size={15} /> Got it</button></>}
   </section></div>;
 }
@@ -310,79 +330,67 @@ function PolicyDashboard({ onModal }) {
 
 export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
   const [modal, setModal] = useState('');
-  const [incidentState, setIncidentState] = useState(loadIncidentState);
+  const [incidentState, setIncidentState] = useState({ tickets: [], activity: [] });
+  const [incidentError, setIncidentError] = useState('');
+  const [incidentLoading, setIncidentLoading] = useState(false);
   const isIncident = page === 'incidents';
 
-  useEffect(() => {
+  async function refreshIncidentState() {
+    setIncidentLoading(true);
+    setIncidentError('');
     try {
-      window.localStorage.setItem(incidentStorageKey, JSON.stringify(incidentState));
-    } catch {
-      // The current page remains usable if browser storage is unavailable.
+      const response = await fetch(`/api/incidents?current_user=${encodeURIComponent(currentUser || '')}`);
+      const payload = await readIncidentResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'Could not load incident tickets.');
+      setIncidentState({ tickets: payload.tickets || [], activity: payload.activity || [] });
+    } catch (error) {
+      setIncidentError(error.message || 'Could not load incident tickets from Databricks.');
+    } finally {
+      setIncidentLoading(false);
     }
-  }, [incidentState]);
+  }
+
+  useEffect(() => {
+    if (isIncident) refreshIncidentState();
+  }, [isIncident, currentUser]);
+
+  async function mutateTicket(ticket, operation, extra = {}) {
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mutate', current_user: currentUser, ticket_id: ticket.ticket_id, operation, ...extra }),
+      });
+      const payload = await readIncidentResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'The ticket could not be updated.');
+      await refreshIncidentState();
+      if (payload.resolution_guidance || payload.resolution_guidance_error) {
+        setModal({ type: 'resolution_guide', guide: payload.resolution_guidance, guideError: payload.resolution_guidance_error });
+      }
+    } catch (error) {
+      setModal({ type: 'notice', message: error.message || 'The ticket could not be updated.' });
+    }
+  }
 
   function assignTicket(ticket, person, acknowledged = false) {
-    if (!currentUser || (acknowledged ? Boolean(ticket.assigned_to) : ticket.assigned_to !== currentUser)) return;
-    if (ticket.assigned_to === person && ticket.ticket_status === 'Assigned') return;
-    const timestamp = new Date().toISOString();
-    const message = acknowledged
-      ? `${ticket.ticket_id} acknowledged and assigned to ${person} by ${currentUser}`
-      : `${ticket.ticket_id} reassigned to ${person} by ${currentUser}`;
-    setIncidentState((current) => ({
-      ...current,
-      tickets: current.tickets.map((item) => item.ticket_id === ticket.ticket_id
-        ? { ...item, assigned_to: person, ticket_status: 'Assigned', last_updated: timestamp, ...(acknowledged ? { acknowledged_at: timestamp, acknowledged_by: currentUser } : {}) }
-        : item),
-      activity: [{ id: crypto.randomUUID(), message, tone: 'blue', timestamp }, ...current.activity],
-    }));
+    return mutateTicket(ticket, acknowledged ? 'acknowledge_assign' : 'assign_to_user', { assignee: person });
   }
-
-  function unassignTicket(ticket) {
-    if (!currentUser || ticket.assigned_to !== currentUser) return;
-    const timestamp = new Date().toISOString();
-    setIncidentState((current) => ({
-      ...current,
-      tickets: current.tickets.map((item) => item.ticket_id === ticket.ticket_id
-        ? { ...item, assigned_to: null, ticket_status: 'Unassigned', last_updated: timestamp }
-        : item),
-      activity: [{ id: crypto.randomUUID(), message: `${ticket.ticket_id} unassigned from ${ticket.assigned_to} by ${currentUser}`, tone: 'orange', timestamp }, ...current.activity],
-    }));
-  }
-
-  function declineTicket(ticket) {
-    if (!currentUser || (ticket.assigned_to && ticket.assigned_to !== currentUser)) return;
-    const timestamp = new Date().toISOString();
-    setIncidentState((current) => ({
-      ...current,
-      tickets: current.tickets.filter((item) => item.ticket_id !== ticket.ticket_id),
-      activity: [{ id: crypto.randomUUID(), message: `${ticket.ticket_id} request declined by ${currentUser}`, tone: 'red', timestamp }, ...current.activity],
-    }));
-  }
-
-  function updateTicketStatus(ticket, status) {
-    if (!currentUser || ticket.assigned_to !== currentUser || ticket.ticket_status === status) return;
-    const timestamp = new Date().toISOString();
-    const activityLabel = status === 'Waiting for Info' ? 'requested more access (Waiting for Info)' : `changed status to ${status}`;
-    const tone = status === 'Completed' ? 'mint' : status === 'Blocked' ? 'red' : status === 'Waiting for Info' ? 'purple' : 'blue';
-    setIncidentState((current) => ({
-      ...current,
-      tickets: current.tickets.map((item) => item.ticket_id === ticket.ticket_id
-        ? { ...item, ticket_status: status, last_updated: timestamp }
-        : item),
-      activity: [{ id: crypto.randomUUID(), message: `${ticket.ticket_id} ${activityLabel} by ${currentUser}`, tone, timestamp }, ...current.activity],
-    }));
-  }
+  function unassignTicket(ticket) { return mutateTicket(ticket, 'unassign'); }
+  function declineTicket(ticket) { return mutateTicket(ticket, 'decline'); }
+  function updateTicketStatus(ticket, status) { return mutateTicket(ticket, 'set_status', { status }); }
 
   return <section className="dashboard-page">
     <div className="dashboard-topbar"><div className="dashboard-search"><Search size={17} /><input placeholder="Search policies, tickets, or ask a question..." aria-label="Search policies and tickets" /><kbd>⌘ K</kbd></div><span className="dashboard-topbar-divider" /><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} /></div>
-    <div className="dashboard-content">{isIncident ? <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} onModal={(message) => setModal({ type: 'notice', message })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
-      <p className="dashboard-footnote"><Filter size={13} />Illustrative demo content only · No live operational data is shown</p>
+    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={refreshIncidentState}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} onModal={(message) => setModal({ type: 'notice', message })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
+      <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Databricks</p>
     </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onLogin={onLogin} currentUser={currentUser} />
   </section>;
 }
 
 export function UserAccountMenu({ currentUser, onLogin, onLogout }) {
   const [open, setOpen] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [busyUser, setBusyUser] = useState('');
   const menuRef = useRef(null);
   useEffect(() => {
     function dismiss(event) {
@@ -397,6 +405,19 @@ export function UserAccountMenu({ currentUser, onLogin, onLogout }) {
     };
   }, []);
 
+  async function chooseAccount(person) {
+    setBusyUser(person);
+    setLoginError('');
+    try {
+      await onLogin(person);
+      setOpen(false);
+    } catch (error) {
+      setLoginError(error.message || 'Could not switch accounts.');
+    } finally {
+      setBusyUser('');
+    }
+  }
+
   return <div className="user-account-menu" ref={menuRef}>
     <button className={`user-account-trigger${currentUser ? ' is-signed-in' : ''}`} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>
       <span className="user-account-avatar">{currentUser ? currentUser[0] : <UserRound size={16} />}</span>
@@ -405,10 +426,11 @@ export function UserAccountMenu({ currentUser, onLogin, onLogout }) {
       <ChevronDown size={14} />
     </button>
     {open && <div className="user-account-popover" role="menu">
-      <div className="user-account-popover-heading"><span>{currentUser ? 'Demo account' : 'Choose a demo account'}</span>{currentUser && <strong>Signed in as {currentUser}</strong>}</div>
-      {['Pratik', 'Sarvesh'].map((person) => <button key={person} role="menuitem" className={currentUser === person ? 'is-current' : ''} onClick={() => { onLogin(person); setOpen(false); }}><span className="user-account-avatar">{person[0]}</span><span>{person}</span>{currentUser === person && <Check size={15} />}</button>)}
+      <div className="user-account-popover-heading"><span>{currentUser ? 'Switch account' : 'Choose an account'}</span>{currentUser && <strong>Signed in as {currentUser}</strong>}</div>
+      {accountNames.map((person) => <button type="button" key={person} role="menuitem" className={currentUser === person ? 'is-current' : ''} disabled={Boolean(busyUser)} onClick={() => chooseAccount(person)}><span className="user-account-avatar">{person[0]}</span><span>{person}</span>{busyUser === person ? <span className="account-switch-spinner" aria-label="Switching account" /> : currentUser === person ? <Check size={15} /> : null}</button>)}
+      {loginError && <small className="user-account-error" role="alert">{loginError}</small>}
       {currentUser && <button className="user-account-logout" role="menuitem" onClick={() => { onLogout(); setOpen(false); }}><LogOut size={15} />Log out</button>}
-      {!currentUser && <small><LogIn size={12} /> Demo sign-in only</small>}
+      {!currentUser && <small><LogIn size={12} /> Select your account to continue</small>}
     </div>}
   </div>;
 }

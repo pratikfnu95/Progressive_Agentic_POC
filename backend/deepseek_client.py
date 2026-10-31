@@ -41,17 +41,23 @@ class DeepSeekAPIError(RuntimeError):
     """An API failure with safe, non-secret diagnostic text."""
 
 
-def chat_completion(messages: list[dict[str, str]], max_tokens: int = 256) -> dict:
+def chat_completion(
+    messages: list[dict[str, str]],
+    max_tokens: int = 256,
+    *,
+    thinking: bool | None = None,
+) -> dict:
     """Send a non-streaming chat completion request without logging credentials."""
     settings = DeepSeekSettings.from_environment()
-    payload = json.dumps(
-        {
-            "model": settings.model,
-            "messages": messages,
-            "stream": False,
-            "max_tokens": max_tokens,
-        }
-    ).encode("utf-8")
+    request_payload = {
+        "model": settings.model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+    }
+    if thinking is not None:
+        request_payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    payload = json.dumps(request_payload).encode("utf-8")
     request = Request(
         f"{settings.base_url}/chat/completions",
         data=payload,
@@ -82,6 +88,11 @@ def chat_completion(messages: list[dict[str, str]], max_tokens: int = 256) -> di
         raise DeepSeekAPIError("DeepSeek returned an unexpected response format.") from None
 
     if not isinstance(answer, str) or not answer.strip():
+        finish_reason = (result.get("choices") or [{}])[0].get("finish_reason")
+        if finish_reason == "length":
+            raise DeepSeekAPIError(
+                "DeepSeek used the output token limit before returning a final answer."
+            )
         raise DeepSeekAPIError("DeepSeek returned an empty response.")
 
     return {

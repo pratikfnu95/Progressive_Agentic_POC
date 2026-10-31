@@ -1,10 +1,22 @@
 # Incident Management and Policy Dashboard Roadmap
 
-## Current UI phase
+## Current Databricks-backed POC workflow
 
-Incident Management and Policy Dashboard are illustrative, front-end-only views. The Incident Management seed tickets are stored in `src/data/incident-tickets.json`; its summary counts and status chart are computed from that file. The initial recent-activity feed is empty. Ticket IDs and summaries open a detail dialog with the issue description and any related policy numbers and statuses. Demo sign-in supports Pratik and Sarvesh. The detail dialog's Take action flow allows acknowledgement/assignment for unassigned tickets; the assigned user can update status, reassign, unassign, or decline. Other signed-in users can view an assigned ticket but cannot change it. Status choices include In Progress, Blocked, Waiting for Info (the Request more access action), and Completed. These actions update browser-local demo state and add activity entries; the state is stored in this browser's local storage. Ticket creation remains a placeholder. The login and assignment checks are client-side demo behavior, not production authorization. These pages do not call the LLM, query Databricks, search external systems, or write to a shared ticket store.
+Incident Management reads current tickets, related policies, team members, and activity from `workspace.default.incident_tickets`, `workspace.default.incident_ticket_policies`, `workspace.default.incident_team_members`, and `workspace.default.incident_ticket_activity`. The JSON file under `src/data` is no longer the dashboard's data source. Dashboard actions and chat actions use the same backend service and update Databricks; the dashboard refreshes from those tables. Recent activity starts empty and is appended as actions occur. Ticket creation remains a placeholder.
 
-To reset the local Incident Management demo to the JSON seed, clear the browser local-storage key `progressive-poc-incident-management-v5` for the app's site and reload the page. To sign out or switch users, use the profile control in the page header.
+Chat asks DeepSeek to classify ticket requests into a constrained JSON intent. The server then reads actual rows or applies a supported action; it does not ask the model to invent ticket details or SQL for incident actions. Supported actions include assignment, status updates, unassignment, and decline. Status is restricted to In Progress, Blocked, Waiting for Info, or Completed. Normal users can update their own assigned tickets; Admin can update any ticket. Assigning to oneself is allowed for unassigned tickets. Every write is validated again by the backend.
+
+The account menu lets a user select a roster identity without an individual account password. The backend stores the selected identity in a signed, HTTP-only session cookie and resolves role/active status from the team roster. This is a demonstration identity switch, not verified user authentication: anyone who can reach the account menu can select any account, so per-user ownership controls are not a security boundary. The existing app-wide access code remains a separate gate.
+
+### Assignment-time investigation guide
+
+After a ticket is assigned through the chat or dashboard, the server can attach a DeepSeek-generated investigation guide to the assignment response. It retrieves matching incident examples from `knowledge_base/incident_reference_cases.json`, uses the Workers' Compensation POC knowledge base for approved table/lineage checks, and returns source-backed case references, category counts, and ordered investigation steps. The guide is shown to the user completing the assignment; if Admin assigns the ticket to another person, there is no push-notification system to deliver it to that person's session.
+
+The case snapshot is generated from all rows in `workspace.default.incident_tickets` and related policy rows, including inactive tickets, by running `.venv/bin/python -m backend.sync_incident_knowledge`. The current snapshot contains eight records and is not a verified resolution archive: the incident tables contain no confirmed root-cause or successful-resolution fields. The UI and prompt must label these as related issue records and investigation suggestions, never as proven fixes. Category counts are counts within the current snapshot, not an enterprise recurrence rate. EDW schemas are not documented in the available knowledge base, so guides must not invent EDW table names.
+
+The Vercel incident function explicitly includes the prompt and knowledge-base files it reads at runtime. Refresh the snapshot and redeploy after adding reviewed incident examples.
+
+The app service principal needs `USE CATALOG` on `workspace`, `USE SCHEMA` on `workspace.default`, `SELECT` on all four incident tables, and `MODIFY` on the tickets and activity tables. Access to the new tables must be confirmed before the workflow can be considered live. Browser-local JSON state is not used for ticket updates.
 
 ## Future incident lifecycle
 
@@ -13,14 +25,15 @@ The planned incident lifecycle is:
 1. Unassigned
 2. Assigned
 3. In Progress
-4. Blocked
-5. Completed
+4. Waiting for Info
+5. Blocked
+6. Completed
 
-When a trusted incident store is selected, users should be able to view tickets, assign unassigned tickets to themselves or teammates, update status, track ownership and timestamps, and inspect ticket history. Ticket creation and updates should require explicit user action and be auditable.
+Future work includes ticket creation, richer audit history views, and stronger identity integration. Ticket actions should remain explicit and auditable.
 
 ## Future AI-assisted investigation
 
-After authorization and data access are designed, the assistant may:
+Future investigation capabilities may:
 
 1. Interpret the reported issue.
 2. Query relevant policy data in Databricks using the existing read-only SQL workflow.
@@ -32,7 +45,7 @@ After authorization and data access are designed, the assistant may:
 
 The assistant must not present a hypothesis as a confirmed cause, fabricate data or history, or perform operational changes without approval.
 
-## Future knowledge base
+## Knowledge base requirements for verified fixes
 
 Begin with version-controlled Markdown files using consistent fields such as:
 
@@ -45,12 +58,13 @@ Begin with version-controlled Markdown files using consistent fields such as:
 - Related tables, jobs, code paths, and references
 - Verification status and owner
 
-Only reviewed incidents should be used as verified historical evidence. Search or retrieval infrastructure can be selected later based on the size and access requirements of the knowledge base.
+Only reviewed incidents with documented evidence and outcomes should be used as verified historical resolutions. The present seeded ticket rows can support symptom similarity and triage suggestions, but not claims of proven fixes. Search or retrieval infrastructure can be selected later based on the size and access requirements of the knowledge base.
 
 ## Data and access guardrails
 
 - Keep Incident Management (ticket lifecycle) distinct from Policy Dashboard (policy data-quality overview).
-- Replace illustrative UI data only when an approved, documented data source is available.
+- Use the approved Databricks incident tables as the source of truth for incident data.
 - Keep credentials server-side and use least-privilege Databricks access.
+- Enforce identity and ownership checks on the backend; do not trust an identity supplied by the browser.
 - Preserve the existing SQL review, read-only validation, and explicit execution approval flow.
 - Require human approval for ticket creation, assignment, or other actions with operational impact.
