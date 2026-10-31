@@ -9,6 +9,7 @@ import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 
 const accountNames = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh', 'Admin'];
 const assignablePeople = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh'];
+const accountAvatarClass = (name) => `account-avatar-${String(name || 'guest').toLowerCase()}`;
 const ownerTicketStatuses = [
   { value: 'In Progress', label: 'In Progress', description: 'Work is underway on this incident.' },
   { value: 'Blocked', label: 'Blocked', description: 'Work cannot continue because of a blocker.' },
@@ -89,7 +90,7 @@ function incidentStats(tickets) {
     [Ticket, 'Total Tickets', tickets.length, null, null, 'blue'],
     [Clock3, 'Unassigned', count('Unassigned'), null, null, 'orange'],
     [UserRound, 'Assigned', count('Assigned'), null, null, 'teal'],
-    [CircleDashed, 'In Progress', count('In Progress'), null, null, 'blue'],
+    [CircleDashed, 'In Progress', count('In Progress'), null, null, 'green'],
     [MessageSquareText, 'Waiting for Info', count('Waiting for Info'), null, null, 'purple'],
     [BadgeCheck, 'Completed', count('Completed'), null, null, 'green'],
     [AlertCircle, 'Blocked', count('Blocked'), null, null, 'red'],
@@ -105,7 +106,7 @@ const policyStats = [
 ];
 
 function StatCards({ stats, label = 'Summary metrics' }) {
-  return <section className="dashboard-stats" aria-label={label}>
+  return <section className={`dashboard-stats dashboard-stats-${stats.length}`} aria-label={label}>
     {stats.map(([Icon, label, value, delta, compare, tone]) => (
       <article className="dashboard-stat-card" key={label}>
         <span className={`dashboard-stat-icon tone-${tone}`}><Icon size={20} /></span>
@@ -159,7 +160,7 @@ function TicketsTable({ policy = false, tickets = [], onOpenDetails }) {
 const ticketStatusVisuals = [
   ['Unassigned', 'orange'],
   ['Assigned', 'teal'],
-  ['In Progress', 'blue'],
+  ['In Progress', 'green'],
   ['Waiting for Info', 'purple'],
   ['Completed', 'green'],
   ['Blocked', 'red'],
@@ -190,13 +191,14 @@ function TicketBreakdown({ tickets }) {
 }
 
 function ActivityPanel({ policy = false, events = [] }) {
+  const activityLimit = 6;
   const items = policy ? [
     ['Premium mismatch flagged for WC-1001', '2 hours ago', 'mint'],
     ['Coverage issue identified for WC-2045', '4 hours ago', 'blue'],
     ['Policy status check completed', 'Yesterday', 'blue'],
     ['New data quality review opened', 'Yesterday', 'red'],
-  ] : events;
-  return <section className="dashboard-panel dashboard-activity"><div className="dashboard-panel-heading"><h2>Recent Activity</h2><button className="dashboard-text-button" aria-label="View all activity">View All<ChevronRight size={15} /></button></div>
+  ] : events.slice(0, activityLimit);
+  return <section className="dashboard-panel dashboard-activity"><div className="dashboard-panel-heading"><h2>Recent Activity</h2></div>
     {items.length ? <ol>{items.map((event) => {
       const label = Array.isArray(event) ? event[0] : event.message;
       const time = Array.isArray(event) ? event[1] : formatActivityTime(event.timestamp);
@@ -380,7 +382,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
   function updateTicketStatus(ticket, status) { return mutateTicket(ticket, 'set_status', { status }); }
 
   return <section className="dashboard-page">
-    <div className="dashboard-topbar"><div className="dashboard-search"><Search size={17} /><input placeholder="Search policies, tickets, or ask a question..." aria-label="Search policies and tickets" /><kbd>⌘ K</kbd></div><span className="dashboard-topbar-divider" /><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} /></div>
+    <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} /></div>
     <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={refreshIncidentState}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} onModal={(message) => setModal({ type: 'notice', message })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
       <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Databricks</p>
     </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onLogin={onLogin} currentUser={currentUser} />
@@ -420,14 +422,14 @@ export function UserAccountMenu({ currentUser, onLogin, onLogout }) {
 
   return <div className="user-account-menu" ref={menuRef}>
     <button className={`user-account-trigger${currentUser ? ' is-signed-in' : ''}`} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>
-      <span className="user-account-avatar">{currentUser ? currentUser[0] : <UserRound size={16} />}</span>
+      <span className={`user-account-avatar ${accountAvatarClass(currentUser)}`}>{currentUser ? currentUser[0] : <UserRound size={16} />}</span>
       {currentUser && <span className="user-account-name">{currentUser}</span>}
       {!currentUser && <span className="user-account-name">Log in</span>}
       <ChevronDown size={14} />
     </button>
     {open && <div className="user-account-popover" role="menu">
       <div className="user-account-popover-heading"><span>{currentUser ? 'Switch account' : 'Choose an account'}</span>{currentUser && <strong>Signed in as {currentUser}</strong>}</div>
-      {accountNames.map((person) => <button type="button" key={person} role="menuitem" className={currentUser === person ? 'is-current' : ''} disabled={Boolean(busyUser)} onClick={() => chooseAccount(person)}><span className="user-account-avatar">{person[0]}</span><span>{person}</span>{busyUser === person ? <span className="account-switch-spinner" aria-label="Switching account" /> : currentUser === person ? <Check size={15} /> : null}</button>)}
+      {accountNames.map((person) => <button type="button" key={person} role="menuitem" className={currentUser === person ? 'is-current' : ''} disabled={Boolean(busyUser)} onClick={() => chooseAccount(person)}><span className={`user-account-avatar ${accountAvatarClass(person)}`}>{person[0]}</span><span>{person}</span>{busyUser === person ? <span className="account-switch-spinner" aria-label="Switching account" /> : currentUser === person ? <Check size={15} /> : null}</button>)}
       {loginError && <small className="user-account-error" role="alert">{loginError}</small>}
       {currentUser && <button className="user-account-logout" role="menuitem" onClick={() => { onLogout(); setOpen(false); }}><LogOut size={15} />Log out</button>}
       {!currentUser && <small><LogIn size={12} /> Select your account to continue</small>}

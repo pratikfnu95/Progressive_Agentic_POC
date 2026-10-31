@@ -7,9 +7,10 @@
     "api/incidents.py": {
       "maxDuration": 60,
       "includeFiles": [
-        "backend/prompts/incident_resolution.md",
         "knowledge_base/incident_reference_cases.md",
         "knowledge_base/incident_reference_cases.json",
+        "knowledge_base/illustrative_resolved_incident_cases.md",
+        "knowledge_base/illustrative_resolved_incident_cases.json",
         "knowledge_base/Progressive_Agentic_POC_Workers_Compensation_Knowledge_Base.md"
       ]
     }

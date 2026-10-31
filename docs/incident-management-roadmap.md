@@ -10,11 +10,11 @@ The account menu lets a user select a roster identity without an individual acco
 
 ### Assignment-time investigation guide
 
-After a ticket is assigned through the chat or dashboard, the server can attach a DeepSeek-generated investigation guide to the assignment response. It retrieves matching incident examples from `knowledge_base/incident_reference_cases.json`, uses the Workers' Compensation POC knowledge base for approved table/lineage checks, and returns source-backed case references, category counts, and ordered investigation steps. The guide is shown to the user completing the assignment; if Admin assigns the ticket to another person, there is no push-notification system to deliver it to that person's session.
+After a ticket is assigned through the chat or dashboard, the server attaches a concise investigation guide to the assignment response. It ranks one reference from `knowledge_base/illustrative_resolved_incident_cases.json` using issue category and symptom terms, then displays that reference's stored resolution summary and up to three short checks. A matching `watch_for` is shown as a caution, not as a confirmed diagnosis. The guide is shown to the user completing the assignment; if Admin assigns the ticket to another person, there is no push-notification system to deliver it to that person's session.
 
-The case snapshot is generated from all rows in `workspace.default.incident_tickets` and related policy rows, including inactive tickets, by running `.venv/bin/python -m backend.sync_incident_knowledge`. The current snapshot contains eight records and is not a verified resolution archive: the incident tables contain no confirmed root-cause or successful-resolution fields. The UI and prompt must label these as related issue records and investigation suggestions, never as proven fixes. Category counts are counts within the current snapshot, not an enterprise recurrence rate. EDW schemas are not documented in the available knowledge base, so guides must not invent EDW table names.
+The operational ticket snapshot in `knowledge_base/incident_reference_cases.json` is generated from `workspace.default.incident_tickets` and related policy rows by running `.venv/bin/python -m backend.sync_incident_knowledge`. It remains live ticket context only and is not used as proof of a historical resolution. The separate `knowledge_base/illustrative_resolved_incident_cases.json` currently contains 22 synthetic examples with representative resolution workflows. They are explicitly labeled illustrative and are not actual Progressive incidents or verified historical fixes. Replace them with reviewed cases before presenting them as real history. Table names in the examples are drawn from the documented Workers' Compensation knowledge base; EDW names are not invented.
 
-The Vercel incident function explicitly includes the prompt and knowledge-base files it reads at runtime. Refresh the snapshot and redeploy after adding reviewed incident examples.
+The Vercel incident function explicitly includes the reference JSON and supporting knowledge-base files it reads at runtime. Refresh the operational ticket snapshot only when live ticket context changes; redeploy after changing the curated reference library.
 
 The app service principal needs `USE CATALOG` on `workspace`, `USE SCHEMA` on `workspace.default`, `SELECT` on all four incident tables, and `MODIFY` on the tickets and activity tables. Access to the new tables must be confirmed before the workflow can be considered live. Browser-local JSON state is not used for ticket updates.
 
@@ -58,7 +58,7 @@ Begin with version-controlled Markdown files using consistent fields such as:
 - Related tables, jobs, code paths, and references
 - Verification status and owner
 
-Only reviewed incidents with documented evidence and outcomes should be used as verified historical resolutions. The present seeded ticket rows can support symptom similarity and triage suggestions, but not claims of proven fixes. Search or retrieval infrastructure can be selected later based on the size and access requirements of the knowledge base.
+Only reviewed incidents with documented evidence and outcomes should be presented as verified historical resolutions. The current synthetic case library supports a POC retrieval and concise triage flow only. Replace sample cases with reviewed incidents before making historical claims. Search or retrieval infrastructure can be selected later based on the size and access requirements of the knowledge base.
 
 ## Data and access guardrails
 

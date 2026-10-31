@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from backend.databricks_connector import open_connection
 from backend.deepseek_client import DeepSeekSettings
+from backend.followup_questions import generate_followup_questions
 from backend.sql_context import discover_gold_schema
 from backend.sql_safety import UnsafeQueryError, validate_read_only_sql
 from backend.vanna_sql import SqlGenerationError, generate_sql
@@ -111,11 +112,26 @@ def _safe_generation_error(error: Exception) -> str:
     return "The assistant could not prepare SQL. Check server-side Databricks and DeepSeek configuration."
 
 
+def _discover_schema_with_retry() -> str:
+    """Retry one transient warehouse lock while reading Gold table metadata."""
+    for attempt in range(2):
+        try:
+            return discover_gold_schema()
+        except Exception as error:
+            is_transient_lock = "deadlock" in str(error).lower() or "lock" in str(error).lower()
+            if attempt or not is_transient_lock:
+                raise
+            LOGGER.warning("stage=schema_discovery transient_warehouse_lock retry=1")
+            time.sleep(0.25)
+    raise RuntimeError("Databricks schema discovery did not complete.")
+
+
 def dispatch_request(payload: dict, cookie_header: str = "") -> tuple[int, dict, str | None]:
     """Handle one authenticated chat API operation."""
     request_id = str(uuid4())
     started = time.monotonic()
     action = payload.get("action")
+    stage = "request_received"
     cookie_to_set = None
     try:
         if action == "status":
@@ -141,8 +157,11 @@ def dispatch_request(payload: dict, cookie_header: str = "") -> tuple[int, dict,
 
         if action == "generate":
             question = str(payload.get("question", "")).strip()
-            schema = discover_gold_schema()
+            stage = "schema_discovery"
+            schema = _discover_schema_with_retry()
+            stage = "sql_generation"
             generated = generate_sql(question, schema)
+            stage = "sql_validation"
             validated = validate_read_only_sql(generated)
             LOGGER.info(
                 "request_id=%s stage=sql_preview tables=%s elapsed_ms=%d",
@@ -154,14 +173,37 @@ def dispatch_request(payload: dict, cookie_header: str = "") -> tuple[int, dict,
                 "status": "validated",
                 "sql": validated.sql,
                 "tables": list(validated.tables),
+                "schema_context": schema,
                 "row_limit": validated.row_limit,
                 "request_id": request_id,
             }, None
 
+        if action == "suggest_followups":
+            question = str(payload.get("question", "")).strip()
+            if not question or len(question) > 2000:
+                raise ApiError(400, "A valid original question is required.")
+            stage = "followup_generation"
+            suggestions = generate_followup_questions(
+                question,
+                payload.get("columns"),
+                payload.get("rows"),
+                payload.get("row_count"),
+                payload.get("schema_context"),
+            )
+            LOGGER.info(
+                "request_id=%s stage=followups_ready count=%d elapsed_ms=%d",
+                request_id,
+                len(suggestions),
+                round((time.monotonic() - started) * 1000),
+            )
+            return 200, {"questions": suggestions, "request_id": request_id}, None
+
         if action == "execute":
+            stage = "query_validation"
             validated = validate_read_only_sql(str(payload.get("sql", "")))
             columns: list[str] = []
             rows: list[list[object]] = []
+            stage = "query_execution"
             with open_connection() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute("SET STATEMENT_TIMEOUT = 30")
@@ -200,14 +242,23 @@ def dispatch_request(payload: dict, cookie_header: str = "") -> tuple[int, dict,
         LOGGER.info("request_id=%s stage=sql_rejected type=%s", request_id, type(error).__name__)
         return 422, {"error": str(error), "request_id": request_id}, cookie_to_set
     except ValueError as error:
-        LOGGER.warning("request_id=%s stage=configuration_error type=%s", request_id, type(error).__name__)
+        LOGGER.warning("request_id=%s stage=%s type=%s", request_id, stage, type(error).__name__)
         return 503, {"error": str(error), "request_id": request_id}, cookie_to_set
     except Exception as error:
-        stage = "query_failed" if action == "execute" else "request_failed"
         # Do not log exception text or SQL; connector errors can echo statement text.
         LOGGER.error("request_id=%s stage=%s type=%s", request_id, stage, type(error).__name__)
         if action == "execute":
             detail = _safe_databricks_error(error)
+        elif stage == "schema_discovery":
+            message = str(error).lower()
+            if "deadlock" in message or "lock" in message:
+                detail = "Databricks hit a temporary warehouse lock while reading table metadata. Please retry the question."
+            elif "timed out" in message or "timeout" in message:
+                detail = "Databricks schema discovery timed out. Try again when the SQL Warehouse is ready."
+            else:
+                detail = _safe_generation_error(error)
+        elif stage == "sql_generation":
+            detail = "DeepSeek could not generate SQL for this request. Please retry or rephrase the question."
         else:
             detail = _safe_generation_error(error)
         return 502, {"error": detail, "request_id": request_id}, cookie_to_set

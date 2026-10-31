@@ -1,0 +1,785 @@
+{
+  "document_title": "Illustrative resolved incident references",
+  "provenance": "Synthetic examples created for the POC. These are not real Progressive incidents, verified historical tickets, or production resolutions. Use them only as starting-point patterns; validate all checks against current evidence and approved runbooks.",
+  "case_count": 22,
+  "status_semantics": "illustrative_resolved means the sample scenario includes a representative resolution workflow; it does not assert a real incident occurred.",
+  "cases": [
+    {
+      "reference_id": "REF-WC-001",
+      "case_key": "premium_mismatch_source",
+      "status": "illustrative_resolved",
+      "issue_category": "Premium mismatch",
+      "issue_summary": "Transaction premium differs from the source record",
+      "match_terms": [
+        "premium mismatch",
+        "written premium",
+        "source total"
+      ],
+      "resolution_summary": "The sample workflow reconciled the same transaction and revision across source, transaction, and coverage values, then localized the first amount difference.",
+      "resolution_steps": [
+        {
+          "title": "Trace the transaction",
+          "instruction": "Compare the policy and revision in `gold_fact_policy_transaction` with the corresponding source values in `silver_wc_policy_transaction`.",
+          "verify": "Confirm the same transaction and revision are being compared."
+        },
+        {
+          "title": "Reconcile coverage amounts",
+          "instruction": "Sum `written_premium` in `gold_fact_coverage` for the transaction and compare it with the transaction premium.",
+          "verify": "Record any difference before checking downstream totals."
+        },
+        {
+          "title": "Check the transformation path",
+          "instruction": "If the values first diverge upstream, review the matching Bronze and Silver records and the approved transformation logic.",
+          "verify": "Identify the earliest layer where the amount changes."
+        }
+      ],
+      "watch_for": "Check whether the comparison uses the same transaction revision; a policy-level total can hide a transaction mismatch.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "gold_fact_policy_transaction",
+        "silver_wc_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-002",
+      "case_key": "premium_mismatch_revision",
+      "status": "illustrative_resolved",
+      "issue_category": "Premium mismatch",
+      "issue_summary": "Policy premium total changes between transaction revisions",
+      "match_terms": [
+        "premium mismatch",
+        "revision",
+        "policy total"
+      ],
+      "resolution_summary": "The sample workflow aligned the included policy revisions and transaction types, then reconciled coverage subtotals to each transaction.",
+      "resolution_steps": [
+        {
+          "title": "Compare revisions",
+          "instruction": "Review `policy_revision_number`, `transaction_type`, and `written_premium_total` in `gold_fact_policy_transaction`.",
+          "verify": "Ensure the requested total includes the intended revisions and transaction types."
+        },
+        {
+          "title": "Rebuild from coverage",
+          "instruction": "Aggregate `gold_fact_coverage.written_premium` by transaction before comparing it with the transaction fact.",
+          "verify": "The coverage subtotal should reconcile to the same transaction."
+        },
+        {
+          "title": "Trace the first difference",
+          "instruction": "Compare the matching Silver transaction with its Gold transaction record.",
+          "verify": "Note the first layer and revision where totals differ."
+        }
+      ],
+      "watch_for": "A revision filter mismatch can make correct records appear missing or overstated.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "gold_fact_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-003",
+      "case_key": "premium_mismatch_aggregation",
+      "status": "illustrative_resolved",
+      "issue_category": "Premium mismatch",
+      "issue_summary": "Premium changes after aggregation",
+      "match_terms": [
+        "premium",
+        "aggregation",
+        "join",
+        "total"
+      ],
+      "resolution_summary": "The sample workflow found a one-to-many join inflating premium rows and restored reconciliation by aggregating each fact set first.",
+      "resolution_steps": [
+        {
+          "title": "Check the base grain",
+          "instruction": "Count rows by `source_transaction_id` in `gold_fact_policy_transaction` and `gold_fact_coverage`.",
+          "verify": "Confirm each side is aggregated at its own transaction grain."
+        },
+        {
+          "title": "Review joins",
+          "instruction": "Compare transaction and coverage totals separately before combining them; do not join raw coverage and charge rows together.",
+          "verify": "Look for repeated transaction amounts after a one-to-many join."
+        },
+        {
+          "title": "Reconcile in order",
+          "instruction": "Compare Silver transaction values to Gold transactions, then compare Gold coverage subtotals.",
+          "verify": "Find the earliest stage where the aggregated total changes."
+        }
+      ],
+      "watch_for": "Joining two one-to-many fact sets before aggregation can multiply premium rows.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "gold_fact_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-004",
+      "case_key": "missing_coverage_gold",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing coverage data",
+      "issue_summary": "Coverage is present upstream but absent in Gold",
+      "match_terms": [
+        "missing coverage",
+        "coverage",
+        "gold"
+      ],
+      "resolution_summary": "The sample workflow found the expected coverage in Silver, then traced the missing Gold row to a code or key mapping filter.",
+      "resolution_steps": [
+        {
+          "title": "Check Silver coverage",
+          "instruction": "Find the policy transaction in `silver_wc_coverage` and note its `coverage_code` and `source_transaction_id`.",
+          "verify": "Confirm the expected coverage row exists before the Gold load."
+        },
+        {
+          "title": "Check Gold coverage",
+          "instruction": "Look for the same transaction and coverage code in `gold_fact_coverage`.",
+          "verify": "A Silver row without a matching Gold row localizes the gap to the Gold transform/load."
+        },
+        {
+          "title": "Review mapping and filters",
+          "instruction": "Compare the applicable Gold transformation filters and key mapping against the source row.",
+          "verify": "Capture the first filter or key that excludes the coverage."
+        }
+      ],
+      "watch_for": "A missing Gold coverage row is most directly checked by transaction ID and coverage code.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "silver_wc_coverage"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-005",
+      "case_key": "missing_coverage_mapping",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing coverage data",
+      "issue_summary": "Coverage code is not represented in the reporting output",
+      "match_terms": [
+        "missing coverage",
+        "coverage code",
+        "mapping"
+      ],
+      "resolution_summary": "The sample workflow matched the source coverage code to its approved mapping and verified the resulting Gold coverage attributes.",
+      "resolution_steps": [
+        {
+          "title": "Verify the source code",
+          "instruction": "Compare `coverage_code` in `silver_wc_coverage` with the corresponding value in `gold_fact_coverage`.",
+          "verify": "Check for null, whitespace, or code-format differences."
+        },
+        {
+          "title": "Review the code mapping",
+          "instruction": "Check the approved coverage mapping used by the transformation for the affected code.",
+          "verify": "Confirm the code maps to an expected coverage record."
+        },
+        {
+          "title": "Validate the output",
+          "instruction": "Check `coverage_name` and `written_premium` for the matching Gold row.",
+          "verify": "Confirm the coverage appears once with the expected mapped attributes."
+        }
+      ],
+      "watch_for": "A code-format or unmapped-code issue can look like a missing coverage.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "silver_wc_coverage"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-006",
+      "case_key": "missing_coverage_join",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing coverage data",
+      "issue_summary": "Coverage row is lost during a policy join",
+      "match_terms": [
+        "missing coverage",
+        "join",
+        "coverage"
+      ],
+      "resolution_summary": "The sample workflow corrected the transaction-to-policy join key so the existing coverage row remained in the reporting output.",
+      "resolution_steps": [
+        {
+          "title": "Trace the transaction key",
+          "instruction": "Compare `source_transaction_id` and `gold_policy_sk` between `gold_fact_coverage` and `gold_dim_policy_jacket`.",
+          "verify": "Check that the fact row has a matching dimension key."
+        },
+        {
+          "title": "Inspect join behavior",
+          "instruction": "Review whether the transformation uses the expected key and preserves coverage rows when policy attributes are absent.",
+          "verify": "Identify rows removed by the join condition."
+        },
+        {
+          "title": "Verify coverage output",
+          "instruction": "Compare coverage counts by transaction in Silver and Gold.",
+          "verify": "Confirm the missing row is accounted for by a documented filter or mapping."
+        }
+      ],
+      "watch_for": "A join-key mismatch can drop coverage even when the source row exists.",
+      "source_tables": [
+        "gold_dim_policy_jacket",
+        "gold_fact_coverage"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-007",
+      "case_key": "incorrect_status_latest_transaction",
+      "status": "illustrative_resolved",
+      "issue_category": "Incorrect policy status",
+      "issue_summary": "Policy status does not match its latest transaction",
+      "match_terms": [
+        "policy status",
+        "latest transaction",
+        "status"
+      ],
+      "resolution_summary": "The sample workflow applied the documented latest-revision ordering and aligned the policy dimension status to that transaction.",
+      "resolution_steps": [
+        {
+          "title": "Order the transactions",
+          "instruction": "Review `transaction_date`, `policy_revision_number`, and `transaction_type` in `gold_fact_policy_transaction`.",
+          "verify": "Determine which record is latest under the documented business rule."
+        },
+        {
+          "title": "Compare status fields",
+          "instruction": "Compare the selected transaction status with `policy_status` in `gold_dim_policy_jacket`.",
+          "verify": "Record whether the dimension reflects the correct latest transaction."
+        },
+        {
+          "title": "Check derivation logic",
+          "instruction": "Trace the policy status from `silver_wc_policy_transaction` into the Gold dimension.",
+          "verify": "Locate any ordering, filter, or mapping difference."
+        }
+      ],
+      "watch_for": "Ties in transaction date may require the documented revision ordering rule.",
+      "source_tables": [
+        "gold_dim_policy_jacket",
+        "gold_fact_policy_transaction",
+        "silver_wc_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-008",
+      "case_key": "incorrect_status_mapping",
+      "status": "illustrative_resolved",
+      "issue_category": "Incorrect policy status",
+      "issue_summary": "A source status maps to an unexpected reporting status",
+      "match_terms": [
+        "policy status",
+        "status mapping",
+        "cancelled"
+      ],
+      "resolution_summary": "The sample workflow identified a source status value not covered by the mapping and confirmed the approved normalized value.",
+      "resolution_steps": [
+        {
+          "title": "Compare source and Gold",
+          "instruction": "Review the policy status in `silver_wc_policy` and the resulting status in `gold_dim_policy_jacket`.",
+          "verify": "Confirm the source status value and reporting value."
+        },
+        {
+          "title": "Inspect status mapping",
+          "instruction": "Check the approved status mapping and any normalization applied in the Gold transformation.",
+          "verify": "Look for an unhandled source value or inconsistent spelling."
+        },
+        {
+          "title": "Check transaction history",
+          "instruction": "Compare the latest `gold_fact_policy_transaction` status and date with the dimension value.",
+          "verify": "Verify the final status follows the documented precedence rule."
+        }
+      ],
+      "watch_for": "A newly encountered source status may not be covered by the current mapping.",
+      "source_tables": [
+        "gold_dim_policy_jacket",
+        "gold_fact_policy_transaction",
+        "silver_wc_policy"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-009",
+      "case_key": "duplicate_transaction_id",
+      "status": "illustrative_resolved",
+      "issue_category": "Duplicate transaction",
+      "issue_summary": "The same source transaction appears more than once",
+      "match_terms": [
+        "duplicate transaction",
+        "source transaction id",
+        "duplicate"
+      ],
+      "resolution_summary": "The sample workflow distinguished legitimate revisions from repeated source transaction IDs and isolated the duplicate load.",
+      "resolution_steps": [
+        {
+          "title": "Find repeated identifiers",
+          "instruction": "Group `gold_fact_policy_transaction` by `source_transaction_id` and inspect counts above one.",
+          "verify": "Confirm whether rows are true duplicates or distinct revisions."
+        },
+        {
+          "title": "Compare business attributes",
+          "instruction": "Compare policy number, revision, transaction type, and transaction date for the repeated rows.",
+          "verify": "Separate legitimate revisions from duplicate loads."
+        },
+        {
+          "title": "Trace upstream",
+          "instruction": "Check the matching `silver_wc_policy_transaction` rows and the Gold load's deduplication key.",
+          "verify": "Identify where an identical transaction was repeated."
+        }
+      ],
+      "watch_for": "Repeated IDs can be valid only when the documented grain and revision keys explain them.",
+      "source_tables": [
+        "gold_fact_policy_transaction",
+        "silver_wc_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-010",
+      "case_key": "duplicate_revision",
+      "status": "illustrative_resolved",
+      "issue_category": "Duplicate transaction",
+      "issue_summary": "A policy revision is duplicated in reporting",
+      "match_terms": [
+        "duplicate",
+        "revision",
+        "policy transaction"
+      ],
+      "resolution_summary": "The sample workflow confirmed the duplicate existed upstream and applied the documented transaction-level deduplication rule.",
+      "resolution_steps": [
+        {
+          "title": "Check the transaction grain",
+          "instruction": "Inspect rows by policy number, `policy_revision_number`, and `source_transaction_id` in `gold_fact_policy_transaction`.",
+          "verify": "Confirm whether duplicate rows share all transaction identifiers."
+        },
+        {
+          "title": "Compare Silver input",
+          "instruction": "Check whether the same duplicate already exists in `silver_wc_policy_transaction`.",
+          "verify": "This distinguishes upstream duplication from Gold processing."
+        },
+        {
+          "title": "Review deduplication",
+          "instruction": "Inspect the Gold transformation's documented deduplication key and ordering.",
+          "verify": "Confirm the retained row follows the approved rule."
+        }
+      ],
+      "watch_for": "Do not treat different revisions for one policy as duplicates without checking the transaction key.",
+      "source_tables": [
+        "gold_fact_policy_transaction",
+        "silver_wc_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-011",
+      "case_key": "missing_source_batch",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing source data",
+      "issue_summary": "Expected policy records are absent from the batch",
+      "match_terms": [
+        "missing source",
+        "batch",
+        "xml"
+      ],
+      "resolution_summary": "The sample workflow located the batch gap by checking raw-file arrival, Bronze parsing, and downstream layer counts in sequence.",
+      "resolution_steps": [
+        {
+          "title": "Confirm file arrival",
+          "instruction": "Check the expected file or batch identifier in `bronze_wc_xml_raw`.",
+          "verify": "Verify the batch was received and recorded."
+        },
+        {
+          "title": "Check parsed records",
+          "instruction": "Compare the batch's policy records in `bronze_wc_policy` with the raw-file record.",
+          "verify": "Determine whether the gap occurred before or during parsing."
+        },
+        {
+          "title": "Trace the batch forward",
+          "instruction": "Compare policy and transaction counts across Bronze, Silver, and Gold for the same batch context.",
+          "verify": "Identify the first layer where expected records are absent."
+        }
+      ],
+      "watch_for": "An absent raw-file record points to arrival; a present raw file with no parsed row points to ingestion/parsing.",
+      "source_tables": [
+        "bronze_wc_policy",
+        "bronze_wc_xml_raw"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-012",
+      "case_key": "missing_downstream_gold",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing downstream data",
+      "issue_summary": "A policy transaction is absent from Gold",
+      "match_terms": [
+        "missing downstream",
+        "gold",
+        "policy transaction"
+      ],
+      "resolution_summary": "The sample workflow identified the first failed pipeline activity and confirmed the last completed data layer before owner review.",
+      "resolution_steps": [
+        {
+          "title": "Check Silver input",
+          "instruction": "Search `silver_wc_policy_transaction` for the policy and source transaction.",
+          "verify": "Confirm whether the expected transaction reached Silver."
+        },
+        {
+          "title": "Check Gold fact",
+          "instruction": "Search `gold_fact_policy_transaction` with the same transaction identifier and revision.",
+          "verify": "Determine whether the row was omitted in the Gold load."
+        },
+        {
+          "title": "Review dimension linkage",
+          "instruction": "If the fact exists, verify its `gold_policy_sk` matches `gold_dim_policy_jacket`.",
+          "verify": "Separate a missing fact from a missing policy-dimension match."
+        }
+      ],
+      "watch_for": "Use the source transaction identifier to avoid confusing a missing row with another revision.",
+      "source_tables": [
+        "gold_dim_policy_jacket",
+        "gold_fact_policy_transaction",
+        "silver_wc_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-013",
+      "case_key": "adf_activity_failure",
+      "status": "illustrative_resolved",
+      "issue_category": "ADF pipeline failure",
+      "issue_summary": "The policy batch did not complete",
+      "match_terms": [
+        "adf",
+        "pipeline",
+        "batch failure"
+      ],
+      "resolution_summary": "The sample workflow traced the missing target field to its approved source-to-target mapping and validated the mapped sample record.",
+      "resolution_steps": [
+        {
+          "title": "Inspect the failed run",
+          "instruction": "Review the approved ADF run details and identify the first failed activity for the affected batch.",
+          "verify": "Capture activity name, run time, and error summary."
+        },
+        {
+          "title": "Check the last completed layer",
+          "instruction": "Compare batch records in `bronze_wc_xml_raw`, `silver_wc_policy_transaction`, and `gold_fact_policy_transaction`.",
+          "verify": "Find the latest layer with completed records."
+        },
+        {
+          "title": "Verify retry safety",
+          "instruction": "Check the runbook and activity outcome before requesting a retry from the pipeline owner.",
+          "verify": "Do not rerun until the owner confirms retry is safe."
+        }
+      ],
+      "watch_for": "A failed downstream activity may leave earlier layers populated; check the batch boundary first.",
+      "source_tables": [
+        "bronze_wc_xml_raw",
+        "gold_fact_policy_transaction",
+        "silver_wc_policy_transaction"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-014",
+      "case_key": "informatica_field_mapping",
+      "status": "illustrative_resolved",
+      "issue_category": "Informatica mapping issue",
+      "issue_summary": "A required policy field is missing in a downstream mapping",
+      "match_terms": [
+        "informatica",
+        "mapping",
+        "required field"
+      ],
+      "resolution_summary": "The sample workflow found the first layer where premium became null and verified its effect on transaction reconciliation.",
+      "resolution_steps": [
+        {
+          "title": "Compare mapped fields",
+          "instruction": "Compare the affected Gold field with the corresponding documented Silver field in the WC knowledge base.",
+          "verify": "Confirm the source field has a value before the downstream mapping."
+        },
+        {
+          "title": "Review mapping specification",
+          "instruction": "Check the approved Informatica mapping and its source-to-target rule with the platform owner.",
+          "verify": "Look for an omitted field, rename, or conditional expression."
+        },
+        {
+          "title": "Validate a sample",
+          "instruction": "Trace one affected policy through the documented source and target records.",
+          "verify": "Record the first point where the field becomes null or changes."
+        }
+      ],
+      "watch_for": "The POC knowledge base does not define EDW table names; use the approved mapping specification rather than guessing them.",
+      "source_tables": []
+    },
+    {
+      "reference_id": "REF-WC-015",
+      "case_key": "null_premium",
+      "status": "illustrative_resolved",
+      "issue_category": "Premium mismatch",
+      "issue_summary": "A premium field is null in the reporting layer",
+      "match_terms": [
+        "null",
+        "premium",
+        "written premium"
+      ],
+      "resolution_summary": "The sample workflow isolated repeated charges and reconciled charge totals separately to avoid multiplying them with coverage rows.",
+      "resolution_steps": [
+        {
+          "title": "Check the source value",
+          "instruction": "Inspect the matching `written_premium` in `silver_wc_coverage` for the affected transaction.",
+          "verify": "Determine whether the null exists before Gold processing."
+        },
+        {
+          "title": "Compare Gold output",
+          "instruction": "Check `written_premium` in `gold_fact_coverage` for the same transaction and coverage code.",
+          "verify": "If Silver is populated but Gold is null, review the transform expression."
+        },
+        {
+          "title": "Review aggregation handling",
+          "instruction": "Check how null coverage amounts are treated when reconciling to `gold_fact_policy_transaction`.",
+          "verify": "Confirm the null is not silently changing the total."
+        }
+      ],
+      "watch_for": "A null at the Silver layer suggests source parsing or normalization; a Gold-only null suggests transform handling.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "gold_fact_policy_transaction",
+        "silver_wc_coverage"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-016",
+      "case_key": "charge_duplicate",
+      "status": "illustrative_resolved",
+      "issue_category": "Premium mismatch",
+      "issue_summary": "Fees or surcharges appear duplicated",
+      "match_terms": [
+        "charge",
+        "duplicate",
+        "fees",
+        "surcharge"
+      ],
+      "resolution_summary": "The sample workflow traced the missing charge from Silver to Gold and identified the first differing charge attribute or filter.",
+      "resolution_steps": [
+        {
+          "title": "Check charge grain",
+          "instruction": "Inspect `gold_fact_charge` by `source_charge_id`, transaction ID, and policy revision.",
+          "verify": "Confirm repeated charge IDs are not separate valid charge rows."
+        },
+        {
+          "title": "Compare upstream charges",
+          "instruction": "Compare the identified rows with `silver_wc_charge` for the same transaction.",
+          "verify": "Determine whether duplication entered before or during Gold loading."
+        },
+        {
+          "title": "Reconcile separately",
+          "instruction": "Aggregate charges by transaction before combining them with coverage or transaction facts.",
+          "verify": "Avoid a raw charge-to-coverage join that multiplies amounts."
+        }
+      ],
+      "watch_for": "Charge and coverage are both one-to-many; joining both raw sets can inflate totals.",
+      "source_tables": [
+        "gold_fact_charge",
+        "silver_wc_charge"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-017",
+      "case_key": "charge_missing",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing downstream data",
+      "issue_summary": "A source fee or surcharge is absent in the reporting layer",
+      "match_terms": [
+        "charge missing",
+        "surcharge",
+        "fee"
+      ],
+      "resolution_summary": "The sample workflow aligned the policy term to the correct revision and located the date conversion or selection difference.",
+      "resolution_steps": [
+        {
+          "title": "Check Silver charges",
+          "instruction": "Find the charge in `silver_wc_charge` by transaction and source charge identifier.",
+          "verify": "Confirm it reached the standardized layer."
+        },
+        {
+          "title": "Check Gold charges",
+          "instruction": "Search `gold_fact_charge` for the same transaction and charge type.",
+          "verify": "Identify whether the charge was lost in Gold mapping or filtering."
+        },
+        {
+          "title": "Compare charge attributes",
+          "instruction": "Compare `amount`, `charge_type`, and `coverage_code` across the matching rows.",
+          "verify": "Note the first field or row that differs."
+        }
+      ],
+      "watch_for": "A missing charge may be filtered by charge type or by a missing transaction key.",
+      "source_tables": [
+        "gold_fact_charge",
+        "silver_wc_charge"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-018",
+      "case_key": "date_mismatch",
+      "status": "illustrative_resolved",
+      "issue_category": "Incorrect policy status",
+      "issue_summary": "Policy term dates do not align with transaction history",
+      "match_terms": [
+        "effective date",
+        "expiration date",
+        "date mismatch"
+      ],
+      "resolution_summary": "The sample workflow found an unmapped class or coverage code and confirmed the expected mapped attribute with the owner.",
+      "resolution_steps": [
+        {
+          "title": "Compare policy dates",
+          "instruction": "Review effective and expiration dates in `gold_dim_policy_jacket` for the policy revision.",
+          "verify": "Record the dates displayed in the reporting dimension."
+        },
+        {
+          "title": "Check transaction dates",
+          "instruction": "Compare transaction and effective dates in `gold_fact_policy_transaction`.",
+          "verify": "Confirm the correct revision supplies the current term."
+        },
+        {
+          "title": "Trace upstream mapping",
+          "instruction": "Compare the same policy dates in `silver_wc_policy` and review the documented date conversion.",
+          "verify": "Identify a parsing, timezone, or revision-selection difference."
+        }
+      ],
+      "watch_for": "A later transaction date does not necessarily mean a later effective date.",
+      "source_tables": [
+        "gold_dim_policy_jacket",
+        "gold_fact_policy_transaction",
+        "silver_wc_policy"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-019",
+      "case_key": "class_code_mapping",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing coverage data",
+      "issue_summary": "A class code or coverage attribute is missing",
+      "match_terms": [
+        "class code",
+        "coverage",
+        "mapping"
+      ],
+      "resolution_summary": "The sample workflow reconciled coverage totals at transaction grain and identified the rows driving the variance.",
+      "resolution_steps": [
+        {
+          "title": "Check Silver attributes",
+          "instruction": "Inspect `class_code` and `coverage_code` in `silver_wc_coverage` for the affected policy transaction.",
+          "verify": "Confirm the input values are populated."
+        },
+        {
+          "title": "Compare Gold attributes",
+          "instruction": "Check the corresponding columns in `gold_fact_coverage`.",
+          "verify": "Identify whether the value was dropped or changed in Gold."
+        },
+        {
+          "title": "Review approved mapping",
+          "instruction": "Compare the source code with the documented mapping rule used by the transformation.",
+          "verify": "Capture any unmapped value for review by the data owner."
+        }
+      ],
+      "watch_for": "An unmapped source code can preserve the coverage row while leaving a descriptive attribute blank.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "silver_wc_coverage"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-020",
+      "case_key": "coverage_premium_mismatch",
+      "status": "illustrative_resolved",
+      "issue_category": "Premium mismatch",
+      "issue_summary": "Coverage premium subtotals do not reconcile",
+      "match_terms": [
+        "coverage premium",
+        "subtotal",
+        "written premium"
+      ],
+      "resolution_summary": "The sample workflow confirmed the raw XML arrived, then isolated the missing parsed policy to an ingestion or structure issue.",
+      "resolution_steps": [
+        {
+          "title": "Aggregate coverage rows",
+          "instruction": "Sum `written_premium` in `gold_fact_coverage` by source transaction.",
+          "verify": "Use the same transaction and revision scope as the comparison."
+        },
+        {
+          "title": "Compare transaction fact",
+          "instruction": "Compare that subtotal with `written_premium_total` in `gold_fact_policy_transaction`.",
+          "verify": "Quantify the variance by transaction before policy-level rollup."
+        },
+        {
+          "title": "Trace differing rows",
+          "instruction": "Compare coverage rows and premium values in `silver_wc_coverage` with Gold.",
+          "verify": "Find missing, duplicated, or changed coverage amounts."
+        }
+      ],
+      "watch_for": "Reconcile at transaction grain first; policy totals may net differences across revisions.",
+      "source_tables": [
+        "gold_fact_coverage",
+        "gold_fact_policy_transaction",
+        "silver_wc_coverage"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-021",
+      "case_key": "xml_parse_issue",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing source data",
+      "issue_summary": "A raw XML policy record is not represented in Bronze parsed rows",
+      "match_terms": [
+        "xml",
+        "parse",
+        "missing source data"
+      ],
+      "resolution_summary": "The sample workflow restored the version-specific policy dimension lookup and verified the fact's surrogate-key link.",
+      "resolution_steps": [
+        {
+          "title": "Locate the raw file",
+          "instruction": "Find the expected file in `bronze_wc_xml_raw` and verify the batch/file identifier.",
+          "verify": "Confirm the raw payload was ingested."
+        },
+        {
+          "title": "Check parsed policy rows",
+          "instruction": "Search `bronze_wc_policy` for the affected policy and transaction.",
+          "verify": "If absent, the issue is before or during policy parsing."
+        },
+        {
+          "title": "Review parse evidence",
+          "instruction": "Inspect available ingestion status or error details and compare the XML structure with the documented fields.",
+          "verify": "Record the parse error or unexpected field path for the pipeline owner."
+        }
+      ],
+      "watch_for": "A raw file present with no parsed policy row suggests a parsing or schema-shape issue.",
+      "source_tables": [
+        "bronze_wc_policy",
+        "bronze_wc_xml_raw"
+      ]
+    },
+    {
+      "reference_id": "REF-WC-022",
+      "case_key": "silver_to_gold_key",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing downstream data",
+      "issue_summary": "A transaction fails to link to its policy dimension",
+      "match_terms": [
+        "gold policy key",
+        "join key",
+        "missing downstream"
+      ],
+      "resolution_summary": "Illustrative workflow: trace the affected value across the documented layers, compare at the correct record grain, and verify the earliest divergence.",
+      "resolution_steps": [
+        {
+          "title": "Check the dimension row",
+          "instruction": "Find the policy number and revision in `gold_dim_policy_jacket` and note `gold_policy_sk`.",
+          "verify": "Confirm the expected dimension version exists."
+        },
+        {
+          "title": "Check the fact key",
+          "instruction": "Compare `gold_policy_sk` and policy/revision values in `gold_fact_policy_transaction`.",
+          "verify": "Verify the fact references the intended dimension version."
+        },
+        {
+          "title": "Trace the key mapping",
+          "instruction": "Review the Silver-to-Gold key resolution for the same policy and revision.",
+          "verify": "Identify a missing dimension lookup or mismatched key."
+        }
+      ],
+      "watch_for": "The policy number can exist in both tables while a version-specific surrogate-key link is missing.",
+      "source_tables": [
+        "gold_dim_policy_jacket",
+        "gold_fact_policy_transaction"
+      ]
+    }
+  ]
+}

@@ -8,9 +8,11 @@ import {
   ChevronDown,
   CircleAlert,
   ClipboardList,
+  Copy,
   DollarSign,
   Timer,
   History,
+  BookOpenText,
   Menu,
   PartyPopper,
   Search,
@@ -20,6 +22,7 @@ import {
 } from 'lucide-react';
 import { DashboardPage, UserAccountMenu } from './Dashboards.jsx';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
+import { HowItWorksPage } from './HowItWorksPage.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
@@ -32,12 +35,12 @@ async function readApiResponse(response) {
 }
 
 const welcomePrompts = [
-  { heading: 'What’s on your mind?', placeholder: 'Message...' },
-  { heading: 'Ready when you are.', placeholder: 'Ask anything...' },
-  { heading: 'How can I help today?', placeholder: 'Type a message...' },
-  { heading: 'Let’s figure it out.', placeholder: 'Start a conversation...' },
-  { heading: 'Good to see you. What are we working on?', placeholder: 'Tell me what you have in mind...' },
-  { heading: 'How’s your day going?', placeholder: 'What would you like to talk about?' },
+  { heading: 'What’s on your mind?', personalizedHeading: 'Hi {name}, what’s on your mind?', placeholder: 'Message...' },
+  { heading: 'Ready when you are.', personalizedHeading: 'Ready when you are, {name}. What shall we work on?', placeholder: 'Ask anything...' },
+  { heading: 'How can I help today?', personalizedHeading: 'Hi {name}, how can I help today?', placeholder: 'Type a message...' },
+  { heading: 'Let’s figure it out.', personalizedHeading: 'Welcome, {name}. What would you like to figure out?', placeholder: 'Start a conversation...' },
+  { heading: 'Good to see you. What are we working on?', personalizedHeading: 'Hi {name}, good to see you. What are we working on?', placeholder: 'Tell me what you have in mind...' },
+  { heading: 'How’s your day going?', personalizedHeading: 'Good to see you, {name}. What would you like to talk about?', placeholder: 'What would you like to talk about?' },
 ];
 
 const activityCopy = {
@@ -52,6 +55,41 @@ const activityCopy = {
     'Preparing your results',
   ],
 };
+
+const welcomeStarters = [
+  { category: 'Policy data', prompt: 'Compare written premium by state', Icon: DollarSign },
+  { category: 'Policy data', prompt: 'Show coverage codes and written premium by policy', Icon: ChartNoAxesColumnIncreasing },
+  { category: 'Incident tickets', prompt: 'List all unassigned incident tickets', Icon: ClipboardList },
+  { category: 'Incident tickets', prompt: 'Show incident tickets assigned to me', Icon: CircleAlert },
+];
+
+const welcomePlaceholders = [
+  'Ask about a workers’ compensation policy…',
+  'Which states have the highest written premium?',
+  'What coverage codes apply to a policy?',
+  'Which incident tickets are assigned to you?',
+  'Show unassigned incidents that need an owner.',
+  'Summarize a policy’s term and written premium.',
+  'Compare written premium across transactions.',
+  'Which tickets are waiting for more information?',
+  'Show the latest transaction for a policy.',
+  'Why might coverage be missing from a policy record?',
+];
+
+function WelcomePromptChips({ onSelect }) {
+  return <section className="welcome-starters" aria-label="Suggested questions">
+    <div className="welcome-starter-grid">
+      {['Policy data', 'Incident tickets'].map((category) => <div className="welcome-starter-group" key={category}>
+        <h4>{category}</h4>
+        {welcomeStarters.filter((starter) => starter.category === category).map(({ prompt, Icon }) => <button type="button" className="welcome-starter" key={prompt} onClick={() => onSelect(prompt)}>
+          <Icon size={16} aria-hidden="true" />
+          <span><strong>{prompt}</strong></span>
+          <ArrowUp size={14} aria-hidden="true" />
+        </button>)}
+      </div>)}
+    </div>
+  </section>;
+}
 
 function ActivityStatus({ status }) {
   const messages = activityCopy[status] || activityCopy.generating;
@@ -331,6 +369,46 @@ function PolicySummaryCard({ summary }) {
 }
 
 function QueryResultsTable({ result }) {
+  const [copyState, setCopyState] = useState('idle');
+  const [selectedPolicy, setSelectedPolicy] = useState(null);
+  const policyNumberIndex = findColumnIndex(result.columns, ['policy_number']);
+
+  useEffect(() => {
+    if (!selectedPolicy) return undefined;
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setSelectedPolicy(null);
+    }
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [selectedPolicy]);
+
+  async function copyResults() {
+    const asCell = (value) => value == null ? '' : String(value).replace(/[\t\r\n]+/g, ' ');
+    const text = [result.columns, ...result.rows].map((row) => row.map(asCell).join('\t')).join('\n');
+    try {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        if (!copied) throw new Error('Clipboard copy failed');
+      }
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1800);
+    } catch {
+      setCopyState('error');
+      window.setTimeout(() => setCopyState('idle'), 2200);
+    }
+  }
+
   return (
     <section className="query-results" aria-label="Query results">
       <div className="results-heading">
@@ -338,19 +416,39 @@ function QueryResultsTable({ result }) {
           <strong>Results</strong>
           <span>{result.row_count} {result.row_count === 1 ? 'row' : 'rows'}</span>
         </div>
-        <span className="results-duration"><Timer size={13} strokeWidth={1.8} />{formatDuration(result.duration_ms)}</span>
+        <div className="results-heading-actions">
+          <button
+            type="button"
+            className={`copy-results-button${copyState === 'copied' ? ' is-copied' : ''}`}
+            onClick={copyResults}
+            aria-label={copyState === 'copied' ? 'Results copied' : copyState === 'error' ? 'Could not copy results' : 'Copy results'}
+            title={copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy results'}
+          >
+            {copyState === 'copied' ? <Check size={15} /> : <Copy size={15} />}
+          </button>
+          <span className="results-duration"><Timer size={13} strokeWidth={1.8} />{formatDuration(result.duration_ms)}</span>
+        </div>
       </div>
       <div className="results-table-wrap">
         <table>
           <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
           <tbody>
             {result.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{value == null ? '—' : String(value)}</td>)}</tr>
+              <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{columnIndex === policyNumberIndex && value != null && String(value).trim()
+                ? <button type="button" className="result-policy-link" onClick={() => setSelectedPolicy({ columns: result.columns, row })}>{String(value)}</button>
+                : value == null ? '—' : String(value)}</td>)}</tr>
             ))}
           </tbody>
         </table>
       </div>
       {result.truncated && <div className="results-truncated">Showing the first 200 rows.</div>}
+      {selectedPolicy && <div className="policy-result-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPolicy(null); }}>
+        <section className="policy-result-modal" role="dialog" aria-modal="true" aria-labelledby="policy-result-title">
+          <header><div><small>Policy details from this result</small><h3 id="policy-result-title">{String(selectedPolicy.row[policyNumberIndex])}</h3></div><button type="button" aria-label="Close policy details" onClick={() => setSelectedPolicy(null)}><X size={19} /></button></header>
+          <dl>{selectedPolicy.columns.map((column, index) => <div key={`${column}-${index}`}><dt>{column.replaceAll('_', ' ')}</dt><dd>{selectedPolicy.row[index] == null || selectedPolicy.row[index] === '' ? '—' : String(selectedPolicy.row[index])}</dd></div>)}</dl>
+          <footer>Details are limited to the columns returned by this query.</footer>
+        </section>
+      </div>}
     </section>
   );
 }
@@ -359,6 +457,15 @@ function QueryResultView({ question, result, responseDurationMs }) {
   const summary = getPolicySummary(question, result);
   const timedResult = { ...result, duration_ms: responseDurationMs ?? result.duration_ms };
   return summary ? <><ResponseTime durationMs={responseDurationMs ?? result.duration_ms} /><PolicySummaryCard summary={summary} /></> : <QueryResultsTable result={timedResult} />;
+}
+
+function FollowupSuggestions({ questions, loading, onSelect }) {
+  if (loading) return <div className="followup-loading" role="status" aria-live="polite"><Sparkles size={14} /><span>Finding useful follow-up questions</span><span className="followup-dots" aria-hidden="true">...</span></div>;
+  if (!questions?.length) return null;
+  return <section className="followup-suggestions" aria-label="Suggested follow-up questions">
+    <h3><Sparkles size={14} />Explore this result</h3>
+    <div>{questions.map((question) => <button type="button" key={question} onClick={() => onSelect(question)}>{question}<ArrowUp size={14} aria-hidden="true" /></button>)}</div>
+  </section>;
 }
 
 const incidentChatStatuses = ['In Progress', 'Blocked', 'Waiting for Info', 'Completed'];
@@ -403,20 +510,58 @@ function IncidentUpdatingStatus({ startedAt }) {
   return <div className="incident-update-status" role="status" aria-live="polite"><span aria-hidden="true"><i /><i /><i /></span>Saving the ticket update and syncing activity…<ElapsedTimer startedAt={startedAt} /></div>;
 }
 
+function formatTicketDetailDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(date);
+}
+
+function ChatTicketDetailsModal({ ticket, onClose }) {
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  const statusClass = String(ticket.ticket_status || 'Unknown').toLowerCase().replaceAll(' ', '-');
+  const policies = ticket.related_policies || [];
+  return <div className="dashboard-modal-backdrop chat-ticket-modal-backdrop" role="presentation" onClick={onClose}>
+    <section className="dashboard-modal dashboard-ticket-modal" role="dialog" aria-modal="true" aria-labelledby="chat-ticket-modal-title" onClick={(event) => event.stopPropagation()}>
+      <button className="dashboard-modal-close" type="button" onClick={onClose} aria-label="Close ticket details"><X size={18} /></button>
+      <span className="dashboard-modal-icon"><ClipboardList size={20} /></span>
+      <h2 id="chat-ticket-modal-title">{ticket.ticket_id}</h2>
+      <div className="ticket-detail-heading"><span className={`ticket-status status-${statusClass}`}>{ticket.ticket_status || 'Unknown'}</span><span>{ticket.issue_category || 'Incident'}</span></div>
+      <div className="ticket-detail-description"><span>Issue summary</span><p>{ticket.issue_summary || 'No summary provided.'}</p><span>Details</span><p>{ticket.issue_description || ticket.issue_summary || 'No additional details provided.'}</p></div>
+      <div className="ticket-detail-section"><h3>Related policies <span>{policies.length}</span></h3>
+        {policies.length ? <div className="ticket-policy-list">{policies.map((policy) => <div className="ticket-policy-item" key={`${ticket.ticket_id}-${policy.policy_number}`}><strong>{policy.policy_number}</strong><span className={`ticket-status status-${String(policy.policy_status || 'Unknown').toLowerCase().replaceAll(' ', '-')}`}>{policy.policy_status || 'Unknown'}</span></div>)}</div> : <p className="ticket-detail-muted">No policy is linked to this incident.</p>}
+      </div>
+      <div className="ticket-detail-grid"><div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatTicketDetailDate(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatTicketDetailDate(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatTicketDetailDate(ticket.acknowledged_at)}</strong></div>}</div>
+      <div className="ticket-detail-footer"><button className="dashboard-modal-secondary" type="button" onClick={onClose}>Close</button></div>
+    </section>
+  </div>;
+}
+
 function IncidentConversationResult({ result, currentUser, onAction }) {
   const [editors, setEditors] = useState({});
   const [fieldSelections, setFieldSelections] = useState({});
+  const [selectedTicket, setSelectedTicket] = useState(null);
   if (!result) return null;
-  if (result.kind === 'clarification') return <p className="incident-chat-note">{result.message}</p>;
+  if (result.kind === 'clarification') return null;
   if (result.kind === 'action_complete') return <><IncidentActionFeedback feedback={{ tone: 'green', icon: 'completed', title: result.message || 'Ticket updated successfully.', detail: result.ticket && `${result.ticket.ticket_id} · ${result.ticket.ticket_status} · ${result.ticket.assigned_to || 'Unassigned'}` }} /><IncidentResolutionGuide guide={result.resolution_guidance} error={result.resolution_guidance_error} /></>;
 
   function ticketCard(ticket) {
     const canManage = currentUser === 'Admin' || ticket.assigned_to === currentUser;
     const canDecline = currentUser && (!ticket.assigned_to || canManage);
     const editor = editors[ticket.ticket_id];
+    const statusSlug = String(ticket.ticket_status || 'unknown').toLowerCase().replaceAll(' ', '-');
     const setEditor = (value) => setEditors((current) => ({ ...current, [ticket.ticket_id]: value }));
-    return <article className="incident-chat-ticket" key={ticket.ticket_id}>
-      <header><strong>{ticket.ticket_id}</strong><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header>
+    return <article className={`incident-chat-ticket incident-ticket-${statusSlug}`} key={ticket.ticket_id}>
+      <header><button className="ticket-detail-link" type="button" onClick={() => setSelectedTicket(ticket)}>{ticket.ticket_id}</button><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header>
       <h4>{ticket.issue_summary}</h4>
       <p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p>
       {ticket.related_policies?.length > 0 && <small className="incident-chat-policies">Policies: {ticket.related_policies.map((policy) => `${policy.policy_number} (${policy.policy_status || 'Unknown'})`).join(', ')}</small>}
@@ -434,42 +579,41 @@ function IncidentConversationResult({ result, currentUser, onAction }) {
 
   if (result.kind === 'status_selection') {
     const ticket = result.ticket;
-    return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}</p><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><div className="incident-chat-choice-list">{result.statuses.map((status) => <button type="button" key={status} className={editors.selectedStatus === status ? 'selected' : ''} onClick={() => setEditors((current) => ({ ...current, selectedStatus: status }))}><i />{status === 'Waiting for Info' ? 'Request more access' : status}</button>)}</div><button className="incident-chat-primary" type="button" disabled={!editors.selectedStatus} onClick={() => onAction(ticket, 'set_status', { status: editors.selectedStatus })}>Save status</button></section>;
+    return <section className="incident-chat-result"><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><div className="incident-chat-choice-list">{result.statuses.map((status) => <button type="button" key={status} className={editors.selectedStatus === status ? 'selected' : ''} onClick={() => setEditors((current) => ({ ...current, selectedStatus: status }))}><i />{status === 'Waiting for Info' ? 'Request more access' : status}</button>)}</div><button className="incident-chat-primary" type="button" disabled={!editors.selectedStatus} onClick={() => onAction(ticket, 'set_status', { status: editors.selectedStatus })}>Save status</button></section>;
   }
 
   if (result.kind === 'assignee_selection') {
     const ticket = result.ticket;
-    return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}</p><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><ProgressiveSelect label="Assign to" value={editors.assignee || ''} placeholder="Select a teammate" options={result.assignees} onChange={(assignee) => setEditors((current) => ({ ...current, assignee }))} /><button className="incident-chat-primary" type="button" disabled={!editors.assignee} onClick={() => onAction(ticket, ticket.assigned_to ? 'assign_to_user' : 'acknowledge_assign', { assignee: editors.assignee })}>Save assignment</button></section>;
+    return <section className="incident-chat-result"><div className="incident-chat-ticket-list">{ticketCardWithoutActions(ticket)}</div><ProgressiveSelect label="Assign to" value={editors.assignee || ''} placeholder="Select a teammate" options={result.assignees} onChange={(assignee) => setEditors((current) => ({ ...current, assignee }))} /><button className="incident-chat-primary" type="button" disabled={!editors.assignee} onClick={() => onAction(ticket, ticket.assigned_to ? 'assign_to_user' : 'acknowledge_assign', { assignee: editors.assignee })}>Save assignment</button></section>;
   }
 
   function ticketCardWithoutActions(ticket) {
-    return <article className="incident-chat-ticket" key={ticket.ticket_id}><header><strong>{ticket.ticket_id}</strong><span className={`ticket-status status-${String(ticket.ticket_status).toLowerCase().replaceAll(' ', '-')}`}>{ticket.ticket_status}</span></header><h4>{ticket.issue_summary}</h4><p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p></article>;
+    const statusSlug = String(ticket.ticket_status || 'unknown').toLowerCase().replaceAll(' ', '-');
+    return <article className={`incident-chat-ticket incident-ticket-${statusSlug}`} key={ticket.ticket_id}><header><button className="ticket-detail-link" type="button" onClick={() => setSelectedTicket(ticket)}>{ticket.ticket_id}</button><span className={`ticket-status status-${statusSlug}`}>{ticket.ticket_status}</span></header><h4>{ticket.issue_summary}</h4><p>{ticket.issue_category} · Assigned to {ticket.assigned_to || 'no one'}</p></article>;
   }
 
-  if (result.kind === 'ticket_list') return <section className="incident-chat-result"><p className="incident-chat-note">{result.summary}{result.tickets?.length ? ` ${result.tickets.length} ticket${result.tickets.length === 1 ? '' : 's'} found.` : ''}</p>{result.tickets?.length ? <div className="incident-chat-ticket-list">{result.tickets.map(ticketCard)}</div> : <div className="incident-chat-empty">No matching incident tickets were found.</div>}</section>;
+  if (result.kind === 'ticket_list') return <><section className="incident-chat-result">{result.tickets?.length ? <div className="incident-chat-ticket-list">{result.tickets.map(ticketCard)}</div> : <div className="incident-chat-empty">No matching incident tickets were found.</div>}</section>{selectedTicket && <ChatTicketDetailsModal ticket={selectedTicket} onClose={() => setSelectedTicket(null)} />}</>;
   return null;
 }
 
-function chooseWelcomePrompt(previousHeading) {
+function chooseWelcomePrompt(previousHeading, previousPlaceholder) {
   const options = welcomePrompts.filter(({ heading }) => heading !== previousHeading);
-  return options[Math.floor(Math.random() * options.length)];
+  const placeholders = welcomePlaceholders.filter((placeholder) => placeholder !== previousPlaceholder);
+  return {
+    ...options[Math.floor(Math.random() * options.length)],
+    placeholder: placeholders[Math.floor(Math.random() * placeholders.length)],
+  };
 }
 
-function BrandLockup() {
+function BrandLockup({ onClick }) {
   const [logoUnavailable, setLogoUnavailable] = useState(false);
+  const brand = !logoUnavailable
+    ? <img className="progressive-logo" src={logoPath} alt={onClick ? '' : 'Progressive Fleet'} onError={() => setLogoUnavailable(true)} />
+    : <span className="brand-fallback">Progressive Fleet</span>;
 
   return (
     <div className="brand-lockup">
-      {!logoUnavailable ? (
-        <img
-          className="progressive-logo"
-          src={logoPath}
-          alt="Progressive Fleet"
-          onError={() => setLogoUnavailable(true)}
-        />
-      ) : (
-        <span className="brand-fallback">Progressive Fleet</span>
-      )}
+      {onClick ? <button className="brand-home-button" type="button" onClick={onClick} aria-label="Progressive Fleet — start a new chat" title="New chat">{brand}</button> : brand}
     </div>
   );
 }
@@ -507,7 +651,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
   return (
     <aside id="app-sidebar" className={`sidebar${mobileOpen ? ' is-mobile-open' : ''}`}>
       <div className="sidebar-topline">
-        <BrandLockup />
+        <BrandLockup onClick={onNewChat} />
       </div>
 
       <nav className="sidebar-actions" aria-label="Main navigation">
@@ -546,6 +690,10 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
         <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')}>
           <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
           <span>Policy Dashboard</span>
+        </button>
+        <button className={`side-action${currentPage === 'guide' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('guide')}>
+          <BookOpenText size={18} strokeWidth={1.8} />
+          <span>How this works</span>
         </button>
       </nav>
 
@@ -676,7 +824,15 @@ function App() {
     setActiveChatId(null);
     setDraft('');
     setMobileSidebarOpen(false);
-    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading));
+    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading, current.placeholder));
+  }
+
+  function openPromptInChat(prompt) {
+    setCurrentPage('chat');
+    setActiveChatId(null);
+    setDraft(prompt);
+    setMobileSidebarOpen(false);
+    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading, current.placeholder));
   }
 
   function selectChat(chatId) {
@@ -721,6 +877,7 @@ function App() {
     const payload = await readApiResponse(response);
     if (!response.ok) throw new Error(payload.error || 'Could not sign in to this account.');
     setCurrentUser(payload.current_user);
+    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading));
     return payload;
   }
 
@@ -767,8 +924,14 @@ function App() {
         throw new Error(incidentPayload.error || 'The incident assistant could not process that request.');
       }
       if (incidentPayload.kind !== 'not_incident') {
+        const ticketCount = incidentPayload.tickets?.length || 0;
+        const assistantText = incidentPayload.kind === 'action_complete'
+          ? ''
+          : incidentPayload.kind === 'ticket_list'
+            ? `${incidentPayload.summary || 'Here are the matching tickets.'}${ticketCount ? ` ${ticketCount} ticket${ticketCount === 1 ? '' : 's'} found.` : ''}`
+            : incidentPayload.message || incidentPayload.summary || '';
         updateMessage(id, assistantId, {
-          content: incidentPayload.message || incidentPayload.summary || '',
+          content: assistantText,
           status: 'completed',
           responseDurationMs: Date.now() - assistantMessage.startedAt,
           incidentResult: incidentPayload,
@@ -790,6 +953,7 @@ function App() {
         status: 'validated',
         sql: payload.sql,
         tables: payload.tables,
+        schemaContext: payload.schema_context,
         requestId: payload.request_id,
       });
     } catch (error) {
@@ -873,7 +1037,26 @@ function App() {
       });
       const payload = await readApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'Databricks query failed.');
-      updateMessage(chatId, message.id, { status: 'completed', result: payload, responseDurationMs: Date.now() - startedAt });
+      updateMessage(chatId, message.id, { status: 'completed', result: payload, responseDurationMs: Date.now() - startedAt, followupsLoading: true });
+      try {
+        const followupResponse = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'suggest_followups',
+            question: message.question,
+            columns: payload.columns,
+            rows: payload.rows,
+            row_count: payload.row_count,
+            schema_context: message.schemaContext,
+          }),
+        });
+        const followupPayload = await readApiResponse(followupResponse);
+        if (!followupResponse.ok) throw new Error(followupPayload.error || 'Could not prepare follow-up questions.');
+        updateMessage(chatId, message.id, { followups: followupPayload.questions || [], followupsLoading: false });
+      } catch {
+        updateMessage(chatId, message.id, { followupsLoading: false });
+      }
     } catch (error) {
       updateMessage(chatId, message.id, { status: 'error', content: error.message || 'Databricks could not complete the query.', responseDurationMs: Date.now() - startedAt });
     }
@@ -935,14 +1118,23 @@ function App() {
         >
           <Menu size={21} strokeWidth={1.8} />
         </button>
-        {currentPage !== 'chat' ? (
+        {currentPage === 'guide' ? (
+          <>
+            <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
+            <HowItWorksPage onUsePrompt={openPromptInChat} />
+          </>
+        ) : currentPage !== 'chat' ? (
           <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} />
         ) : !activeChat ? (
           <>
           <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
           <section className="welcome-view">
             <div className="welcome-content">
-              <h2 key={welcomePrompt.heading}>{welcomePrompt.heading}</h2>
+              <h2 key={`${currentUser || 'guest'}-${welcomePrompt.heading}`}>
+                {currentUser && welcomePrompt.personalizedHeading
+                  ? welcomePrompt.personalizedHeading.replace('{name}', currentUser)
+                  : welcomePrompt.heading}
+              </h2>
               <div className="welcome-composer-wrap">
                 <Composer
                   value={draft}
@@ -951,6 +1143,7 @@ function App() {
                   placeholder={welcomePrompt.placeholder}
                 />
               </div>
+              <WelcomePromptChips onSelect={(prompt) => sendMessage(prompt)} />
             </div>
           </section>
           </>
@@ -990,7 +1183,10 @@ function App() {
                         </section>
                       )}
                       {message.result && (
-                        <QueryResultView question={message.question} result={message.result} responseDurationMs={message.responseDurationMs} />
+                        <>
+                          <QueryResultView question={message.question} result={message.result} responseDurationMs={message.responseDurationMs} />
+                          <FollowupSuggestions questions={message.followups} loading={message.followupsLoading} onSelect={(question) => sendMessage(question)} />
+                        </>
                       )}
                     </div>
                   </article>
