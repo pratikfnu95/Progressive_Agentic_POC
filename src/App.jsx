@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   CalendarDays,
+  ChartNoAxesColumnIncreasing,
+  ClipboardList,
   DollarSign,
   Timer,
   History,
@@ -11,6 +13,7 @@ import {
   SquarePen,
   X,
 } from 'lucide-react';
+import { DashboardPage, UserAccountMenu } from './Dashboards.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
@@ -379,7 +382,7 @@ function SidebarArtwork() {
   );
 }
 
-function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen }) {
+function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, currentPage, setCurrentPage }) {
   const [searching, setSearching] = useState(false);
   const [searchText, setSearchText] = useState('');
   const searchRef = useRef(null);
@@ -427,6 +430,14 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen }
             <span>Search chats</span>
           </button>
         )}
+        <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')}>
+          <ClipboardList size={18} strokeWidth={1.8} />
+          <span>Incident Management</span>
+        </button>
+        <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')}>
+          <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
+          <span>Policy Dashboard</span>
+        </button>
       </nav>
 
       <div className="chat-history">
@@ -495,17 +506,36 @@ function Composer({ value, setValue, onSend, placeholder, compact = false }) {
 }
 
 function App() {
+  const demoUserStorageKey = 'progressive-demo-user-v1';
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(demoUserStorageKey);
+      return ['Pratik', 'Sarvesh'].includes(stored) ? stored : null;
+    } catch {
+      return null;
+    }
+  });
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
   const [draft, setDraft] = useState('');
   const [welcomePrompt, setWelcomePrompt] = useState(() => chooseWelcomePrompt());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState('chat');
   const [accessGate, setAccessGate] = useState(null);
   const [accessCode, setAccessCode] = useState('');
   const [accessError, setAccessError] = useState('');
   const [checkingSession, setCheckingSession] = useState(true);
   const messagesEndRef = useRef(null);
   const activeChat = chats.find((chat) => chat.id === activeChatId);
+
+  useEffect(() => {
+    try {
+      if (currentUser) window.localStorage.setItem(demoUserStorageKey, currentUser);
+      else window.localStorage.removeItem(demoUserStorageKey);
+    } catch {
+      // Demo sign-in remains usable for the current page if browser storage is unavailable.
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     let active = true;
@@ -541,6 +571,7 @@ function App() {
   }, [activeChat?.messages]);
 
   function startNewChat() {
+    setCurrentPage('chat');
     setActiveChatId(null);
     setDraft('');
     setMobileSidebarOpen(false);
@@ -548,6 +579,7 @@ function App() {
   }
 
   function selectChat(chatId) {
+    setCurrentPage('chat');
     setActiveChatId(chatId);
     setMobileSidebarOpen(false);
   }
@@ -678,6 +710,8 @@ function App() {
         setActiveChatId={selectChat}
         onNewChat={startNewChat}
         mobileOpen={mobileSidebarOpen}
+        currentPage={currentPage}
+        setCurrentPage={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }}
       />
 
       <main className="main-panel">
@@ -691,7 +725,11 @@ function App() {
         >
           <Menu size={21} strokeWidth={1.8} />
         </button>
-        {!activeChat ? (
+        {currentPage !== 'chat' ? (
+          <DashboardPage page={currentPage} currentUser={currentUser} onLogin={setCurrentUser} onLogout={() => setCurrentUser(null)} />
+        ) : !activeChat ? (
+          <>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={setCurrentUser} onLogout={() => setCurrentUser(null)} /></div>
           <section className="welcome-view">
             <div className="welcome-content">
               <h2 key={welcomePrompt.heading}>{welcomePrompt.heading}</h2>
@@ -705,7 +743,10 @@ function App() {
               </div>
             </div>
           </section>
+          </>
         ) : (
+          <>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={setCurrentUser} onLogout={() => setCurrentUser(null)} /></div>
           <section className="conversation-view">
             <div className="conversation-scroll">
               <div className="message-list">
@@ -746,6 +787,7 @@ function App() {
               <Composer value={draft} setValue={setDraft} onSend={() => sendMessage()} placeholder="Message..." compact />
             </div>
           </section>
+          </>
         )}
       </main>
     </div>
