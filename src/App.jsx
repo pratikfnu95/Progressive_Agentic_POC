@@ -8,6 +8,7 @@ import {
   ChevronDown,
   CircleAlert,
   ClipboardList,
+  Copy,
   DollarSign,
   Timer,
   History,
@@ -52,6 +53,41 @@ const activityCopy = {
     'Preparing your results',
   ],
 };
+
+const welcomeStarters = [
+  { category: 'Policy data', prompt: 'Compare written premium by state', Icon: DollarSign },
+  { category: 'Policy data', prompt: 'Show coverage codes and written premium by policy', Icon: ChartNoAxesColumnIncreasing },
+  { category: 'Incident tickets', prompt: 'List all unassigned incident tickets', Icon: ClipboardList },
+  { category: 'Incident tickets', prompt: 'Show incident tickets assigned to me', Icon: CircleAlert },
+];
+
+const welcomePlaceholders = [
+  'Ask about a workers’ compensation policy…',
+  'Which states have the highest written premium?',
+  'What coverage codes apply to a policy?',
+  'Which incident tickets are assigned to you?',
+  'Show unassigned incidents that need an owner.',
+  'Summarize a policy’s term and written premium.',
+  'Compare written premium across transactions.',
+  'Which tickets are waiting for more information?',
+  'Show the latest transaction for a policy.',
+  'Why might coverage be missing from a policy record?',
+];
+
+function WelcomePromptChips({ onSelect }) {
+  return <section className="welcome-starters" aria-label="Suggested questions">
+    <div className="welcome-starter-grid">
+      {['Policy data', 'Incident tickets'].map((category) => <div className="welcome-starter-group" key={category}>
+        <h4>{category}</h4>
+        {welcomeStarters.filter((starter) => starter.category === category).map(({ prompt, Icon }) => <button type="button" className="welcome-starter" key={prompt} onClick={() => onSelect(prompt)}>
+          <Icon size={16} aria-hidden="true" />
+          <span><strong>{prompt}</strong></span>
+          <ArrowUp size={14} aria-hidden="true" />
+        </button>)}
+      </div>)}
+    </div>
+  </section>;
+}
 
 function ActivityStatus({ status }) {
   const messages = activityCopy[status] || activityCopy.generating;
@@ -331,6 +367,46 @@ function PolicySummaryCard({ summary }) {
 }
 
 function QueryResultsTable({ result }) {
+  const [copyState, setCopyState] = useState('idle');
+  const [selectedPolicy, setSelectedPolicy] = useState(null);
+  const policyNumberIndex = findColumnIndex(result.columns, ['policy_number']);
+
+  useEffect(() => {
+    if (!selectedPolicy) return undefined;
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setSelectedPolicy(null);
+    }
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [selectedPolicy]);
+
+  async function copyResults() {
+    const asCell = (value) => value == null ? '' : String(value).replace(/[\t\r\n]+/g, ' ');
+    const text = [result.columns, ...result.rows].map((row) => row.map(asCell).join('\t')).join('\n');
+    try {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        if (!copied) throw new Error('Clipboard copy failed');
+      }
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1800);
+    } catch {
+      setCopyState('error');
+      window.setTimeout(() => setCopyState('idle'), 2200);
+    }
+  }
+
   return (
     <section className="query-results" aria-label="Query results">
       <div className="results-heading">
@@ -338,19 +414,33 @@ function QueryResultsTable({ result }) {
           <strong>Results</strong>
           <span>{result.row_count} {result.row_count === 1 ? 'row' : 'rows'}</span>
         </div>
-        <span className="results-duration"><Timer size={13} strokeWidth={1.8} />{formatDuration(result.duration_ms)}</span>
+        <div className="results-heading-actions">
+          <button type="button" className={`copy-results-button${copyState === 'copied' ? ' is-copied' : ''}`} onClick={copyResults} aria-live="polite">
+            {copyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}{copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy results'}
+          </button>
+          <span className="results-duration"><Timer size={13} strokeWidth={1.8} />{formatDuration(result.duration_ms)}</span>
+        </div>
       </div>
       <div className="results-table-wrap">
         <table>
           <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
           <tbody>
             {result.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{value == null ? '—' : String(value)}</td>)}</tr>
+              <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{columnIndex === policyNumberIndex && value != null && String(value).trim()
+                ? <button type="button" className="result-policy-link" onClick={() => setSelectedPolicy({ columns: result.columns, row })}>{String(value)}</button>
+                : value == null ? '—' : String(value)}</td>)}</tr>
             ))}
           </tbody>
         </table>
       </div>
       {result.truncated && <div className="results-truncated">Showing the first 200 rows.</div>}
+      {selectedPolicy && <div className="policy-result-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPolicy(null); }}>
+        <section className="policy-result-modal" role="dialog" aria-modal="true" aria-labelledby="policy-result-title">
+          <header><div><small>Policy details from this result</small><h3 id="policy-result-title">{String(selectedPolicy.row[policyNumberIndex])}</h3></div><button type="button" aria-label="Close policy details" onClick={() => setSelectedPolicy(null)}><X size={19} /></button></header>
+          <dl>{selectedPolicy.columns.map((column, index) => <div key={`${column}-${index}`}><dt>{column.replaceAll('_', ' ')}</dt><dd>{selectedPolicy.row[index] == null || selectedPolicy.row[index] === '' ? '—' : String(selectedPolicy.row[index])}</dd></div>)}</dl>
+          <footer>Details are limited to the columns returned by this query.</footer>
+        </section>
+      </div>}
     </section>
   );
 }
@@ -359,6 +449,15 @@ function QueryResultView({ question, result, responseDurationMs }) {
   const summary = getPolicySummary(question, result);
   const timedResult = { ...result, duration_ms: responseDurationMs ?? result.duration_ms };
   return summary ? <><ResponseTime durationMs={responseDurationMs ?? result.duration_ms} /><PolicySummaryCard summary={summary} /></> : <QueryResultsTable result={timedResult} />;
+}
+
+function FollowupSuggestions({ questions, loading, onSelect }) {
+  if (loading) return <div className="followup-loading" role="status" aria-live="polite"><Sparkles size={14} /><span>Finding useful follow-up questions</span><span className="followup-dots" aria-hidden="true">...</span></div>;
+  if (!questions?.length) return null;
+  return <section className="followup-suggestions" aria-label="Suggested follow-up questions">
+    <h3><Sparkles size={14} />Explore this result</h3>
+    <div>{questions.map((question) => <button type="button" key={question} onClick={() => onSelect(question)}>{question}<ArrowUp size={14} aria-hidden="true" /></button>)}</div>
+  </section>;
 }
 
 const incidentChatStatuses = ['In Progress', 'Blocked', 'Waiting for Info', 'Completed'];
@@ -489,26 +588,24 @@ function IncidentConversationResult({ result, currentUser, onAction }) {
   return null;
 }
 
-function chooseWelcomePrompt(previousHeading) {
+function chooseWelcomePrompt(previousHeading, previousPlaceholder) {
   const options = welcomePrompts.filter(({ heading }) => heading !== previousHeading);
-  return options[Math.floor(Math.random() * options.length)];
+  const placeholders = welcomePlaceholders.filter((placeholder) => placeholder !== previousPlaceholder);
+  return {
+    ...options[Math.floor(Math.random() * options.length)],
+    placeholder: placeholders[Math.floor(Math.random() * placeholders.length)],
+  };
 }
 
-function BrandLockup() {
+function BrandLockup({ onClick }) {
   const [logoUnavailable, setLogoUnavailable] = useState(false);
+  const brand = !logoUnavailable
+    ? <img className="progressive-logo" src={logoPath} alt={onClick ? '' : 'Progressive Fleet'} onError={() => setLogoUnavailable(true)} />
+    : <span className="brand-fallback">Progressive Fleet</span>;
 
   return (
     <div className="brand-lockup">
-      {!logoUnavailable ? (
-        <img
-          className="progressive-logo"
-          src={logoPath}
-          alt="Progressive Fleet"
-          onError={() => setLogoUnavailable(true)}
-        />
-      ) : (
-        <span className="brand-fallback">Progressive Fleet</span>
-      )}
+      {onClick ? <button className="brand-home-button" type="button" onClick={onClick} aria-label="Progressive Fleet — start a new chat" title="New chat">{brand}</button> : brand}
     </div>
   );
 }
@@ -546,7 +643,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
   return (
     <aside id="app-sidebar" className={`sidebar${mobileOpen ? ' is-mobile-open' : ''}`}>
       <div className="sidebar-topline">
-        <BrandLockup />
+        <BrandLockup onClick={onNewChat} />
       </div>
 
       <nav className="sidebar-actions" aria-label="Main navigation">
@@ -715,7 +812,7 @@ function App() {
     setActiveChatId(null);
     setDraft('');
     setMobileSidebarOpen(false);
-    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading));
+    setWelcomePrompt((current) => chooseWelcomePrompt(current.heading, current.placeholder));
   }
 
   function selectChat(chatId) {
@@ -836,6 +933,7 @@ function App() {
         status: 'validated',
         sql: payload.sql,
         tables: payload.tables,
+        schemaContext: payload.schema_context,
         requestId: payload.request_id,
       });
     } catch (error) {
@@ -919,7 +1017,26 @@ function App() {
       });
       const payload = await readApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'Databricks query failed.');
-      updateMessage(chatId, message.id, { status: 'completed', result: payload, responseDurationMs: Date.now() - startedAt });
+      updateMessage(chatId, message.id, { status: 'completed', result: payload, responseDurationMs: Date.now() - startedAt, followupsLoading: true });
+      try {
+        const followupResponse = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'suggest_followups',
+            question: message.question,
+            columns: payload.columns,
+            rows: payload.rows,
+            row_count: payload.row_count,
+            schema_context: message.schemaContext,
+          }),
+        });
+        const followupPayload = await readApiResponse(followupResponse);
+        if (!followupResponse.ok) throw new Error(followupPayload.error || 'Could not prepare follow-up questions.');
+        updateMessage(chatId, message.id, { followups: followupPayload.questions || [], followupsLoading: false });
+      } catch {
+        updateMessage(chatId, message.id, { followupsLoading: false });
+      }
     } catch (error) {
       updateMessage(chatId, message.id, { status: 'error', content: error.message || 'Databricks could not complete the query.', responseDurationMs: Date.now() - startedAt });
     }
@@ -1001,6 +1118,7 @@ function App() {
                   placeholder={welcomePrompt.placeholder}
                 />
               </div>
+              <WelcomePromptChips onSelect={(prompt) => sendMessage(prompt)} />
             </div>
           </section>
           </>
@@ -1040,7 +1158,10 @@ function App() {
                         </section>
                       )}
                       {message.result && (
-                        <QueryResultView question={message.question} result={message.result} responseDurationMs={message.responseDurationMs} />
+                        <>
+                          <QueryResultView question={message.question} result={message.result} responseDurationMs={message.responseDurationMs} />
+                          <FollowupSuggestions questions={message.followups} loading={message.followupsLoading} onSelect={(question) => sendMessage(question)} />
+                        </>
                       )}
                     </div>
                   </article>

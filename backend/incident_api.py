@@ -34,12 +34,9 @@ def dispatch_incident_request(payload: dict, cookie_header: str = "") -> tuple[i
             assignee = data["ticket"].get("assigned_to") or (user["display_name"] if user else "the assignee")
             try:
                 data["resolution_guidance"] = generate_resolution_guidance(data["ticket"], assignee)
-            except DeepSeekAPIError:
-                LOGGER.warning("assignment saved; resolution guide generation failed at llm_request")
-                data["resolution_guidance_error"] = "The ticket was assigned, but suggested investigation steps could not be generated right now."
             except IncidentError as error:
                 LOGGER.warning("assignment saved; resolution guide unavailable status=%d", error.status)
-                data["resolution_guidance_error"] = "The ticket was assigned, but its reference guide is unavailable. Refresh the incident reference snapshot and try again."
+                data["resolution_guidance_error"] = "The ticket was assigned, but its investigation reference could not be loaded."
             except Exception as error:
                 LOGGER.warning("assignment saved; resolution guide generation failed type=%s", type(error).__name__)
                 data["resolution_guidance_error"] = "The ticket was assigned, but suggested investigation steps could not be generated right now."
