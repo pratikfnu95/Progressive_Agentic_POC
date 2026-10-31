@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
+  CalendarDays,
+  DollarSign,
+  Timer,
   History,
   Menu,
   Search,
@@ -11,6 +14,14 @@ import {
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
+async function readApiResponse(response) {
+  try {
+    return await response.json();
+  } catch {
+    return { error: 'The assistant server returned an unreadable response. Check that the backend is running.' };
+  }
+}
+
 const welcomePrompts = [
   { heading: 'What’s on your mind?', placeholder: 'Message...' },
   { heading: 'Ready when you are.', placeholder: 'Ask anything...' },
@@ -19,6 +30,313 @@ const welcomePrompts = [
   { heading: 'Good to see you. What are we working on?', placeholder: 'Tell me what you have in mind...' },
   { heading: 'How’s your day going?', placeholder: 'What would you like to talk about?' },
 ];
+
+const activityCopy = {
+  generating: [
+    'Thinking through your question',
+    'Finding the right information',
+    'Preparing your query',
+  ],
+  running: [
+    'Running your query',
+    'Gathering your results',
+    'Organizing your results',
+  ],
+};
+
+function ActivityStatus({ status }) {
+  const messages = activityCopy[status] || activityCopy.generating;
+  const [messageIndex, setMessageIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setMessageIndex((current) => (current + 1) % messages.length);
+    }, 1800);
+    return () => window.clearInterval(interval);
+  }, [messages.length]);
+
+  return (
+    <div className={`activity-status activity-${status}`} role="status" aria-live="polite">
+      <span className="activity-indicator" aria-hidden="true"><i /><i /><i /></span>
+      <span key={messageIndex} className="activity-label">{messages[messageIndex]}</span>
+      <span className="activity-ellipsis" aria-hidden="true"><i /><i /><i /></span>
+    </div>
+  );
+}
+
+function formatDuration(durationMs) {
+  const milliseconds = Math.max(0, Number(durationMs) || 0);
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(1)} sec`;
+  const minutes = Math.floor(milliseconds / 60_000);
+  const seconds = Math.round((milliseconds % 60_000) / 1000);
+  return `${minutes} min ${seconds} sec`;
+}
+
+function normalizeColumnName(column) {
+  return String(column).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function findColumnIndex(columns, names) {
+  const candidates = new Set(names.map(normalizeColumnName));
+  return columns.findIndex((column) => candidates.has(normalizeColumnName(column)));
+}
+
+function nonEmptyValues(rows, columnIndex) {
+  if (columnIndex < 0) return [];
+  return [...new Set(rows
+    .map((row) => row?.[columnIndex])
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map((value) => String(value)))];
+}
+
+function formatPolicyDate(value) {
+  if (value === null || value === undefined || value === '') return 'Not provided';
+  const raw = String(value);
+  const datePart = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const date = datePart
+    ? new Date(Date.UTC(Number(datePart[1]), Number(datePart[2]) - 1, Number(datePart[3])))
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(date);
+}
+
+function formatPolicyMoney(value, currency) {
+  if (value === null || value === undefined || value === '') return 'Not provided';
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return String(value);
+  const currencyCode = String(currency || '').trim().toUpperCase();
+  if (/^[A-Z]{3}$/.test(currencyCode)) {
+    try {
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: currencyCode }).format(amount);
+    } catch {
+      // Show the returned amount and currency code if the code is not supported by Intl.
+    }
+  }
+  const formatted = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  return currencyCode ? `${formatted} ${currencyCode}` : formatted;
+}
+
+function sumNumericColumn(rows, columnIndex) {
+  if (columnIndex < 0) return null;
+  const values = rows
+    .map((row) => row?.[columnIndex])
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map((value) => Number(String(value).replace(/,/g, '')))
+    .filter(Number.isFinite);
+  return values.length ? values.reduce((total, value) => total + value, 0) : null;
+}
+
+function getPolicySummary(question, result) {
+  if (!question || !result?.columns?.length || !result?.rows?.length) return null;
+  const asksForSummary = /\b(summary|summarize|summarise|overview|snapshot|at a glance)\b/i.test(question);
+  if (!asksForSummary || !/\bpolicy\b/i.test(question)) return null;
+
+  const columns = result.columns;
+  const rows = result.rows;
+  const indexes = {
+    policyNumber: findColumnIndex(columns, ['policy_number']),
+    revision: findColumnIndex(columns, ['policy_revision_number']),
+    effective: findColumnIndex(columns, ['effective_date']),
+    expiration: findColumnIndex(columns, ['expiration_date', 'expiry_date']),
+    policyStatus: findColumnIndex(columns, ['policy_status']),
+    transactionType: findColumnIndex(columns, ['transaction_type']),
+    transactionDate: findColumnIndex(columns, ['transaction_date']),
+    transactionStatus: findColumnIndex(columns, ['transaction_status']),
+    transactionId: findColumnIndex(columns, ['source_transaction_id', 'transaction_id']),
+    currency: findColumnIndex(columns, ['currency']),
+    writtenPremium: findColumnIndex(columns, ['written_premium_total', 'written_premium']),
+    chargesTotal: findColumnIndex(columns, ['charges_total']),
+    insuredName: findColumnIndex(columns, ['insured_name', 'business_name']),
+  };
+  const policyNumbers = nonEmptyValues(rows, indexes.policyNumber);
+  if (policyNumbers.length !== 1) return null;
+
+  const periods = [...new Map(rows.map((row) => {
+    const effective = indexes.effective >= 0 ? row?.[indexes.effective] : null;
+    const expiration = indexes.expiration >= 0 ? row?.[indexes.expiration] : null;
+    return [`${effective ?? ''}|${expiration ?? ''}`, { effective, expiration }];
+  }).filter(([key]) => key !== '|')).values()];
+  const transactionEvents = rows.map((row, index) => ({
+    date: indexes.transactionDate >= 0 ? row?.[indexes.transactionDate] : null,
+    type: indexes.transactionType >= 0 ? row?.[indexes.transactionType] : null,
+    status: indexes.transactionStatus >= 0 ? row?.[indexes.transactionStatus] : null,
+    policyStatus: indexes.policyStatus >= 0 ? row?.[indexes.policyStatus] : null,
+    revision: indexes.revision >= 0 ? row?.[indexes.revision] : null,
+    transactionId: indexes.transactionId >= 0 ? row?.[indexes.transactionId] : null,
+    writtenPremium: indexes.writtenPremium >= 0 ? row?.[indexes.writtenPremium] : null,
+    chargesTotal: indexes.chargesTotal >= 0 ? row?.[indexes.chargesTotal] : null,
+    currency: indexes.currency >= 0 ? row?.[indexes.currency] : null,
+    effective: indexes.effective >= 0 ? row?.[indexes.effective] : null,
+    expiration: indexes.expiration >= 0 ? row?.[indexes.expiration] : null,
+    originalIndex: index,
+  })).filter((event) => event.date || event.type || event.status);
+  const seenEvents = new Set();
+  const uniqueEvents = transactionEvents.filter((event) => {
+    const key = [event.date, event.type, event.status, event.policyStatus, event.transactionId, event.revision].join('|');
+    if (seenEvents.has(key)) return false;
+    seenEvents.add(key);
+    return true;
+  }).sort((left, right) => String(left.date || '').localeCompare(String(right.date || ''))
+    || Number(left.revision || 0) - Number(right.revision || 0)
+    || left.originalIndex - right.originalIndex);
+
+  const latestEvent = uniqueEvents.at(-1);
+  const latestPolicyStatus = latestEvent?.policyStatus
+    ?? [...rows].reverse().map((row) => indexes.policyStatus >= 0 ? row?.[indexes.policyStatus] : null)
+      .find((value) => value !== null && value !== undefined && String(value).trim() !== '');
+  let statusLabel = 'Not provided';
+  if (latestPolicyStatus !== null && latestPolicyStatus !== undefined && String(latestPolicyStatus).trim()) {
+    const status = String(latestPolicyStatus).trim();
+    if (/cancel/i.test(status)) statusLabel = 'Cancelled';
+    else if (/expire|lapse/i.test(status)) statusLabel = 'Expired';
+    else if (/active|in[ -]?force|bound|issued/i.test(status)) statusLabel = 'Active';
+    else statusLabel = status;
+  } else if (/cancel/i.test(String(latestEvent?.type || ''))) {
+    statusLabel = 'Cancelled';
+  }
+
+  const currencyValues = nonEmptyValues(rows, indexes.currency);
+  const singleCurrency = currencyValues.length === 1 ? currencyValues[0] : null;
+  const writtenPremiumTotal = sumNumericColumn(rows, indexes.writtenPremium);
+  const chargesTotal = sumNumericColumn(rows, indexes.chargesTotal);
+  const currencyMismatch = currencyValues.length > 1;
+  const aggregateLabel = result.truncated ? 'Partial total; additional transactions were omitted' : `Aggregated across ${rows.length} transaction${rows.length === 1 ? '' : 's'}`;
+  const formatAggregate = (total) => currencyMismatch
+    ? 'Multiple currencies'
+    : total === null
+      ? 'Not available in this result'
+      : formatPolicyMoney(total, singleCurrency);
+  const insuredNames = nonEmptyValues(rows, indexes.insuredName);
+
+  return {
+    policyNumber: policyNumbers[0],
+    insuredName: insuredNames.length === 1 ? insuredNames[0] : null,
+    statusLabel,
+    statusTone: /cancel|expire|lapse/i.test(statusLabel) ? 'cancelled' : /active|in[ -]?force|bound|issued/i.test(statusLabel) ? 'active' : 'neutral',
+    periods,
+    writtenPremium: formatAggregate(writtenPremiumTotal),
+    writtenPremiumNote: writtenPremiumTotal === null ? 'Not available in this result' : aggregateLabel,
+    charges: formatAggregate(chargesTotal),
+    chargesNote: chargesTotal === null ? 'Not available in this result' : aggregateLabel,
+    events: uniqueEvents,
+  };
+}
+
+function PolicySummaryCard({ summary }) {
+  const singlePeriod = summary.periods.length === 1 ? summary.periods[0] : null;
+
+  return (
+    <section className="policy-summary-card" aria-label={`Policy summary for ${summary.policyNumber}`}>
+      <header className="policy-summary-hero">
+        <div>
+          <span className="policy-summary-kicker">Policy summary</span>
+          <h3>{summary.policyNumber}</h3>
+          {summary.insuredName && <p>{summary.insuredName}</p>}
+        </div>
+        <span className={`policy-status-badge status-${summary.statusTone}`}>{summary.statusLabel}</span>
+      </header>
+
+      <div className="policy-summary-grid">
+        <article className="policy-metric-tile policy-period-tile">
+          <div className="policy-metric-label"><CalendarDays size={15} /> Coverage period</div>
+          {singlePeriod ? (
+            <>
+              <div className="policy-date-range">
+                <span>{formatPolicyDate(singlePeriod.effective)}</span>
+                <span className="policy-date-arrow" aria-hidden="true">→</span>
+                <span>{formatPolicyDate(singlePeriod.expiration)}</span>
+              </div>
+              <div className="policy-calendar-track" aria-hidden="true"><i /><i /></div>
+            </>
+          ) : summary.periods.length > 1 ? (
+            <><strong>{summary.periods.length} policy terms</strong><small>Dates are shown by transaction below.</small></>
+          ) : (
+            <><strong>Not provided</strong><small>Coverage dates weren’t included in this result.</small></>
+          )}
+        </article>
+
+        <article className="policy-metric-tile">
+          <div className="policy-metric-label"><DollarSign size={15} /> Total written premium</div>
+          <strong>{summary.writtenPremium}</strong>
+          <small>{summary.writtenPremiumNote}</small>
+        </article>
+
+        <article className="policy-metric-tile">
+          <div className="policy-metric-label"><DollarSign size={15} /> Fees &amp; surcharges</div>
+          <strong>{summary.charges}</strong>
+          <small>{summary.chargesNote}</small>
+        </article>
+      </div>
+
+      <section className="policy-transaction-timeline" aria-label="Policy transaction history">
+        <div className="policy-timeline-heading">
+          <h4>Transactions</h4>
+          <span>{summary.events.length} {summary.events.length === 1 ? 'record' : 'records'}</span>
+        </div>
+        {summary.events.length ? (
+          <ol>
+            {summary.events.map((event, index) => (
+              <li key={`${event.transactionId || 'event'}-${event.date || index}-${index}`}>
+                <span className="policy-timeline-marker" aria-hidden="true" />
+                <div className="policy-event-content">
+                  <div className="policy-event-topline">
+                    <strong>{event.type || 'Policy transaction'}</strong>
+                    {event.date && <time>{formatPolicyDate(event.date)}</time>}
+                  </div>
+                  {(event.status || (event.revision !== null && event.revision !== undefined)) && (
+                    <small>{[event.status, event.revision !== null && event.revision !== undefined ? `Revision ${event.revision}` : null].filter(Boolean).join(' · ')}</small>
+                  )}
+                  {(event.effective || event.expiration) && (
+                    <small>Term: {formatPolicyDate(event.effective)} <span aria-hidden="true">→</span> {formatPolicyDate(event.expiration)}</small>
+                  )}
+                  {event.writtenPremium !== null && event.writtenPremium !== undefined && (
+                    <small>Written premium: {formatPolicyMoney(event.writtenPremium, event.currency)}</small>
+                  )}
+                  {event.chargesTotal !== null && event.chargesTotal !== undefined && (
+                    <small>Fees &amp; surcharges: {formatPolicyMoney(event.chargesTotal, event.currency)}</small>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p>Transaction details weren’t included in this result.</p>
+        )}
+      </section>
+    </section>
+  );
+}
+
+function QueryResultsTable({ result }) {
+  return (
+    <section className="query-results" aria-label="Query results">
+      <div className="results-heading">
+        <div className="results-summary">
+          <strong>Results</strong>
+          <span>{result.row_count} {result.row_count === 1 ? 'row' : 'rows'}</span>
+        </div>
+        <span className="results-duration"><Timer size={13} strokeWidth={1.8} />{formatDuration(result.duration_ms)}</span>
+      </div>
+      <div className="results-table-wrap">
+        <table>
+          <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+          <tbody>
+            {result.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{value == null ? '—' : String(value)}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {result.truncated && <div className="results-truncated">Showing the first 200 rows.</div>}
+    </section>
+  );
+}
+
+function QueryResultView({ question, result }) {
+  const summary = getPolicySummary(question, result);
+  return summary ? <PolicySummaryCard summary={summary} /> : <QueryResultsTable result={result} />;
+}
 
 function chooseWelcomePrompt(previousHeading) {
   const options = welcomePrompts.filter(({ heading }) => heading !== previousHeading);
@@ -182,8 +500,29 @@ function App() {
   const [draft, setDraft] = useState('');
   const [welcomePrompt, setWelcomePrompt] = useState(() => chooseWelcomePrompt());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [accessGate, setAccessGate] = useState(null);
+  const [accessCode, setAccessCode] = useState('');
+  const [accessError, setAccessError] = useState('');
+  const [checkingSession, setCheckingSession] = useState(true);
   const messagesEndRef = useRef(null);
   const activeChat = chats.find((chat) => chat.id === activeChatId);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/chat')
+      .then(async (response) => {
+        const payload = await readApiResponse(response);
+        if (!active) return;
+        if (response.status === 401 || response.status === 503) {
+          setAccessGate(payload.error || 'Enter the application access code to continue.');
+        } else if (response.ok) {
+          setAccessGate(payload.authenticated ? null : 'Enter the application access code to continue.');
+        }
+      })
+      .catch(() => {})
+      .finally(() => active && setCheckingSession(false));
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -199,7 +538,7 @@ function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeChat?.messages.length]);
+  }, [activeChat?.messages]);
 
   function startNewChat() {
     setActiveChatId(null);
@@ -213,23 +552,115 @@ function App() {
     setMobileSidebarOpen(false);
   }
 
-  function sendMessage(value = draft) {
+  function updateMessage(chatId, messageId, changes) {
+    setChats((current) => current.map((chat) => chat.id === chatId
+      ? { ...chat, messages: chat.messages.map((message) => message.id === messageId ? { ...message, ...changes } : message) }
+      : chat));
+  }
+
+  async function submitAccessCode(event) {
+    event.preventDefault();
+    setAccessError('');
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'login', password: accessCode }),
+      });
+      const payload = await readApiResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'Could not verify the access code.');
+      setAccessCode('');
+      setAccessGate(null);
+    } catch (error) {
+      setAccessError(error.message || 'Could not connect to the application server.');
+    }
+  }
+
+  async function sendMessage(value = draft) {
     const content = value.trim();
     if (!content) return;
     const id = activeChatId ?? crypto.randomUUID();
     const userMessage = { id: crypto.randomUUID(), role: 'user', content };
+    const assistantId = crypto.randomUUID();
+    const assistantMessage = { id: assistantId, role: 'assistant', question: content, content: '', status: 'generating' };
 
     setChats((current) => {
       const existing = current.find((chat) => chat.id === id);
       if (existing) {
         return current.map((chat) => chat.id === id
-          ? { ...chat, messages: [...chat.messages, userMessage] }
+          ? { ...chat, messages: [...chat.messages, userMessage, assistantMessage] }
           : chat);
       }
-      return [{ id, title: content.length > 38 ? `${content.slice(0, 38).trimEnd()}…` : content, messages: [userMessage] }, ...current];
+      return [{ id, title: content.length > 38 ? `${content.slice(0, 38).trimEnd()}…` : content, messages: [userMessage, assistantMessage] }, ...current];
     });
     setActiveChatId(id);
     setDraft('');
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'generate', question: content }),
+      });
+      const payload = await readApiResponse(response);
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 503) setAccessGate(payload.error);
+        throw new Error(payload.error || 'SQL generation failed.');
+      }
+      updateMessage(id, assistantId, {
+        content: 'Your query is ready. Review it below and approve it to see the results.',
+        status: 'validated',
+        sql: payload.sql,
+        tables: payload.tables,
+        requestId: payload.request_id,
+      });
+    } catch (error) {
+      updateMessage(id, assistantId, {
+        content: error.message || 'Could not reach the assistant service. Start the backend and try again.',
+        status: 'error',
+      });
+    }
+  }
+
+  async function executeQuery(chatId, message) {
+    updateMessage(chatId, message.id, { status: 'running', content: '' });
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'execute', sql: message.sql }),
+      });
+      const payload = await readApiResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'Databricks query failed.');
+      updateMessage(chatId, message.id, { status: 'completed', result: payload });
+    } catch (error) {
+      updateMessage(chatId, message.id, { status: 'error', content: error.message || 'Databricks could not complete the query.' });
+    }
+  }
+
+  if (accessGate) {
+    return (
+      <main className="access-screen">
+        <div className="access-card">
+          <BrandLockup />
+          <h1>Progressive AI</h1>
+          <p>{accessGate}</p>
+          <form onSubmit={submitAccessCode}>
+            <input
+              type="password"
+              value={accessCode}
+              onChange={(event) => setAccessCode(event.target.value)}
+              placeholder="Application access code"
+              aria-label="Application access code"
+              autoComplete="current-password"
+              autoFocus
+            />
+            <button type="submit" disabled={!accessCode}>Continue</button>
+          </form>
+          {accessError && <div className="access-error" role="alert">{accessError}</div>}
+          {checkingSession && <span className="access-hint">Checking secure session…</span>}
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -281,14 +712,33 @@ function App() {
                 {activeChat.messages.map((message) => (
                   <article className={`message-row message-${message.role}`} key={message.id}>
                     {message.role === 'assistant' && <span className="assistant-avatar"><Sparkles size={14} /></span>}
-                    <div className="message-content">{message.content}</div>
+                    <div className="message-content">
+                      <div>{message.content}</div>
+                      {message.status === 'generating' && <ActivityStatus status="generating" />}
+                      {message.sql && (
+                        <section className="sql-review" aria-label="Generated SQL review">
+                          <div className="sql-review-heading">
+                            <span>{message.status === 'completed' ? 'Results ready' : message.status === 'running' ? 'Working on your results' : 'Review your query'}</span>
+                            <span className="sql-row-cap">Up to 200 rows</span>
+                          </div>
+                          <pre><code>{message.sql}</code></pre>
+                          {message.tables?.length > 0 && (
+                            <div className="sql-table-scope">Tables: {message.tables.map((table) => table.split('.').at(-1)).join(', ')}</div>
+                          )}
+                          {message.status === 'validated' && (
+                            <button className="run-query-button" onClick={() => executeQuery(activeChat.id, message)}>
+                              Approve &amp; run query
+                            </button>
+                          )}
+                          {message.status === 'running' && <div className="query-running"><ActivityStatus status="running" /></div>}
+                        </section>
+                      )}
+                      {message.result && (
+                        <QueryResultView question={message.question} result={message.result} />
+                      )}
+                    </div>
                   </article>
                 ))}
-                {activeChat.messages.at(-1)?.role === 'user' && (
-                  <div className="not-connected-note">
-                    <span>AI responses aren’t connected yet.</span>
-                  </div>
-                )}
                 <div ref={messagesEndRef} />
               </div>
             </div>
