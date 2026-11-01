@@ -23,19 +23,19 @@ import {
 
 const policyFlow = [
   { id: 'question', label: 'Your question', detail: 'Ask in everyday language, such as “Compare written premium by state.”', Icon: MessageSquareText, tag: 'YOU' },
-  { id: 'api', label: 'Assistant service', detail: 'The FastAPI backend discovers the available Gold schema and sends the relevant context for SQL generation.', Icon: Network, tag: 'FASTAPI' },
-  { id: 'llm', label: 'SQL generation', detail: 'Vanna’s SQL workflow uses DeepSeek to draft a query grounded in the discovered schema and business guidance.', Icon: WandSparkles, tag: 'VANNA + DEEPSEEK' },
-  { id: 'safety', label: 'Review & safeguards', detail: 'The backend parses the SQL, rejects unsafe or non-read-only statements, and asks you to approve the query before it runs.', Icon: ShieldCheck, tag: 'READ ONLY' },
+  { id: 'api', label: 'Schema context', detail: 'FastAPI discovers columns and types for the five approved Gold tables and prepares relevant business guidance.', Icon: Network, tag: 'FASTAPI' },
+  { id: 'llm', label: 'SQL generation', detail: 'Vanna’s SQL workflow sends your question and schema context to the configured DeepSeek endpoint to draft Databricks SQL.', Icon: WandSparkles, tag: 'VANNA + DEEPSEEK' },
+  { id: 'safety', label: 'Review & safeguards', detail: 'SQLGlot checks for one read-only SELECT against approved Gold tables, with a 200-row cap. Review the SQL and approve it before execution.', Icon: ShieldCheck, tag: 'REVIEW FIRST' },
   { id: 'warehouse', label: 'Databricks', detail: 'The approved query runs against the configured Databricks SQL Warehouse and approved tables.', Icon: Database, tag: 'SQL WAREHOUSE' },
-  { id: 'result', label: 'Grounded result', detail: 'The app displays the rows Databricks returned, with the generated SQL, row count, and query time.', Icon: Table2, tag: 'ACTUAL ROWS' },
+  { id: 'result', label: 'Results & next steps', detail: 'The app displays actual rows returned by Databricks, the generated SQL, row count, and query time, followed by relevant follow-up suggestions when available.', Icon: Table2, tag: 'ACTUAL ROWS' },
 ];
 
 const incidentFlow = [
   { id: 'incident-request', label: 'Ticket request', detail: 'Ask for tickets in plain language, or use the Incident Management dashboard.', Icon: MessageSquareText, tag: 'CHAT OR DASHBOARD' },
-  { id: 'incident-service', label: 'Incident service', detail: 'The backend interprets the request, checks the selected POC user and permissions, then performs the supported ticket action.', Icon: Braces, tag: 'FASTAPI' },
-  { id: 'incident-data', label: 'Ticket records', detail: 'Ticket, team, policy-link, and activity records are read from or updated in the configured Databricks incident tables.', Icon: ClipboardList, tag: 'DATABRICKS TABLES' },
-  { id: 'incident-guidance', label: 'Helpful reference', detail: 'After assignment, the app can retrieve a similar illustrative case from a local JSON reference library and show suggested checks.', Icon: FileSearch, tag: 'LOCAL JSON' },
-  { id: 'incident-view', label: 'Synced view', detail: 'The chat and dashboard reflect ticket changes and recent activity from the shared incident data source.', Icon: BadgeCheck, tag: 'CHAT + DASHBOARD' },
+  { id: 'incident-service', label: 'Intent & permissions', detail: 'DeepSeek classifies chat requests into supported ticket intents. FastAPI applies the existing POC role and ownership checks before an action.', Icon: Braces, tag: 'FASTAPI + DEEPSEEK' },
+  { id: 'incident-data', label: 'Databricks records', detail: 'Ticket, team, policy-link, and activity records come from the configured incident tables. Supported changes are written to Databricks and shown after confirmation.', Icon: ClipboardList, tag: 'DATABRICKS TABLES' },
+  { id: 'incident-guidance', label: 'Investigation guide', detail: 'After assignment, the app separately retrieves up to three suggested checks from a local JSON library of illustrative—not historical—cases.', Icon: FileSearch, tag: 'ILLUSTRATIVE JSON' },
+  { id: 'incident-view', label: 'Dashboard & chat', detail: 'The chat and dashboard show confirmed ticket changes. A short-lived dashboard cache, background refresh, and manual refresh keep the view current.', Icon: BadgeCheck, tag: 'CHAT + DASHBOARD' },
 ];
 
 const samplePrompts = [
@@ -66,7 +66,7 @@ function FlowLane({ title, caption, items, activeId, onSelect, variant }) {
   </section>;
 }
 
-export function HowItWorksPage({ onUsePrompt }) {
+export function HowItWorksPage({ onUsePrompt, onNavigate }) {
   const [activeFlowId, setActiveFlowId] = useState('safety');
   const [copiedPrompt, setCopiedPrompt] = useState('');
   const activeFlow = [...policyFlow, ...incidentFlow].find(({ id }) => id === activeFlowId) || policyFlow[3];
@@ -87,8 +87,35 @@ export function HowItWorksPage({ onUsePrompt }) {
         <div className="guide-eyebrow"><BookOpenText size={15} /> Progressive AI · POC guide</div>
         <h1>Policy insight and incident work, made easier.</h1>
         <p>Ask a question in plain language. Explore policy data, work with incident tickets, and see how the assistant gets from your request to a useful result.</p>
-        <div className="guide-hero-meta"><span><i /> Current POC capabilities</span><span>Built for human review</span></div>
+        <div className="guide-hero-meta"><span><i /> Current POC capabilities</span><span>Built for human review</span><a href="#guide-walkthrough">Start the 2-minute walkthrough <ArrowRight size={13} /></a></div>
       </header>
+
+      <section className="guide-section guide-walkthrough" id="guide-walkthrough" aria-labelledby="guide-walkthrough-title">
+        <div className="guide-section-heading">
+          <div><span className="guide-kicker">A QUICK STAKEHOLDER WALKTHROUGH</span><h2 id="guide-walkthrough-title">See the POC in three steps</h2></div>
+          <p>Follow this short path to see the policy and incident workflows.</p>
+        </div>
+        <div className="guide-walkthrough-grid">
+          <article className="guide-walkthrough-card">
+            <span className="guide-walkthrough-number">01</span><span className="guide-walkthrough-icon"><MessageSquareText size={18} /></span>
+            <small>ASK A POLICY QUESTION</small><h3>Start with plain English</h3>
+            <p>Ask for a premium comparison using the configured policy data.</p>
+            <button type="button" onClick={() => onUsePrompt('Compare written premium by state')}>Try a policy question <ArrowUpRight size={14} /></button>
+          </article>
+          <article className="guide-walkthrough-card">
+            <span className="guide-walkthrough-number">02</span><span className="guide-walkthrough-icon"><ShieldCheck size={18} /></span>
+            <small>REVIEW BEFORE RUNNING</small><h3>Inspect and approve SQL</h3>
+            <p>Review the generated query in chat, then choose <strong>Approve &amp; run query</strong> to retrieve real rows.</p>
+            <span className="guide-walkthrough-note"><LockKeyhole size={13} /> Read-only policy queries</span>
+          </article>
+          <article className="guide-walkthrough-card">
+            <span className="guide-walkthrough-number">03</span><span className="guide-walkthrough-icon"><ClipboardList size={18} /></span>
+            <small>EXPLORE INCIDENT WORK</small><h3>Update a ticket and review</h3>
+            <p>Open the incident board to view assignments, supported status changes, activity, and suggested checks.</p>
+            <button type="button" onClick={() => onNavigate?.('incidents')}>Open Incident Management <ArrowUpRight size={14} /></button>
+          </article>
+        </div>
+      </section>
 
       <section className="guide-section guide-architecture" aria-labelledby="guide-architecture-title">
         <div className="guide-section-heading">
@@ -101,7 +128,7 @@ export function HowItWorksPage({ onUsePrompt }) {
           <FlowLane title="Incident tickets" caption="Ticket search · controlled updates · reference guidance" items={incidentFlow} activeId={activeFlowId} onSelect={setActiveFlowId} variant="incident" />
           <div className="guide-flow-detail" aria-live="polite"><span className="guide-flow-detail-icon"><activeFlow.Icon size={17} /></span><div><small>WHAT HAPPENS HERE</small><strong>{activeFlow.label}</strong><p>{activeFlow.detail}</p></div><span className="guide-flow-step">{activeFlow.tag}</span></div>
         </div>
-        <div className="guide-architecture-note"><LockKeyhole size={15} /><span>Credentials stay on the server. Policy SQL is validated as read-only and must be approved before execution.</span></div>
+        <div className="guide-architecture-note"><LockKeyhole size={15} /><span>Credentials stay on the server. Policy SQL must pass server-side read-only validation and receive your approval before execution. Incident actions use separate, permission-checked endpoints.</span></div>
       </section>
 
       <section className="guide-section" aria-labelledby="guide-capabilities-title">
