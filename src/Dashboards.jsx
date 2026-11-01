@@ -2,10 +2,38 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertCircle, ArrowLeft, ArrowUpRight, BadgeCheck, BookOpenCheck, CalendarDays,
   Check, ChevronDown, ChevronRight, CircleDashed, Clock3, FileWarning, Filter,
-  Hand, LogIn, LogOut, MessageSquareText, Plus, Search, ShieldAlert, Sparkles,
+  Hand, LogIn, LogOut, MessageSquareText, Plus, RefreshCw, Search, ShieldAlert, Sparkles,
   Ticket, UserRound, X,
 } from 'lucide-react';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
+
+const INCIDENT_CACHE_TTL_MS = 30_000;
+const incidentSnapshotCache = { snapshot: null, fetchedAt: 0, request: null };
+
+export function invalidateIncidentSnapshotCache() {
+  incidentSnapshotCache.fetchedAt = 0;
+}
+
+async function loadIncidentSnapshot({ force = false } = {}) {
+  const isFresh = incidentSnapshotCache.snapshot && Date.now() - incidentSnapshotCache.fetchedAt < INCIDENT_CACHE_TTL_MS;
+  if (!force && isFresh) return incidentSnapshotCache.snapshot;
+  if (incidentSnapshotCache.request) return incidentSnapshotCache.request;
+
+  incidentSnapshotCache.request = (async () => {
+    const response = await fetch('/api/incidents');
+    const payload = await readIncidentResponse(response);
+    if (!response.ok) throw new Error(payload.error || 'Could not load incident tickets.');
+    const snapshot = { tickets: payload.tickets || [], activity: payload.activity || [] };
+    incidentSnapshotCache.snapshot = snapshot;
+    incidentSnapshotCache.fetchedAt = Date.now();
+    return snapshot;
+  })();
+  try {
+    return await incidentSnapshotCache.request;
+  } finally {
+    incidentSnapshotCache.request = null;
+  }
+}
 
 const accountNames = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh', 'Admin'];
 const assignablePeople = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh'];
@@ -75,11 +103,14 @@ const shortcuts = [
   [Hand, 'Analyze policy data', 'Check data and identify discrepancies'],
 ];
 
-function DashboardHeader({ title, subtitle, onCreate }) {
+function DashboardHeader({ title, subtitle, onCreate, onRefresh, refreshing = false, lastUpdated = null }) {
   return (
     <header className="dashboard-header">
       <div><div className="dashboard-title-line"><h1>{title}</h1></div><p>{subtitle}</p></div>
-      {onCreate && <button className="dashboard-primary-button" onClick={onCreate}><Plus size={17} />Create New Ticket</button>}
+      <div className="dashboard-header-actions">
+        {onRefresh && <button type="button" className="dashboard-refresh-button" onClick={onRefresh} disabled={refreshing} aria-label="Refresh incident data" title={lastUpdated ? `Last refreshed ${formatIncidentTimestamp(lastUpdated)}` : 'Refresh incident data'}><RefreshCw size={15} className={refreshing ? 'is-refreshing' : ''} /><span>{refreshing ? 'Refreshing' : 'Refresh'}</span></button>}
+        {onCreate && <button className="dashboard-primary-button" onClick={onCreate}><Plus size={17} />Create New Ticket</button>}
+      </div>
     </header>
   );
 }
@@ -373,10 +404,10 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
   </section></div>;
 }
 
-function IncidentDashboard({ tickets, activity, onModal, onOpenDetails, pendingTicketId }) {
+function IncidentDashboard({ tickets, activity, onModal, onOpenDetails, pendingTicketId, onRefresh, refreshing, lastUpdated }) {
   const [selectedStatus, setSelectedStatus] = useState(null);
   const visibleTickets = selectedStatus ? tickets.filter((ticket) => ticket.ticket_status === selectedStatus) : tickets;
-  return <><DashboardHeader title="Incident Management" subtitle="Track, investigate and resolve data and policy issues." onCreate={() => onModal('Ticket creation is coming soon. This preview does not create or save tickets.')} />
+  return <><DashboardHeader title="Incident Management" subtitle="Track, investigate and resolve data and policy issues." onRefresh={onRefresh} refreshing={refreshing} lastUpdated={lastUpdated} onCreate={() => onModal('Ticket creation is coming soon. This preview does not create or save tickets.')} />
     <StatCards stats={incidentStats(tickets)} label="Ticket metrics from test data" onStatusSelect={setSelectedStatus} selectedStatus={selectedStatus} /><div className="dashboard-primary-grid incident-primary-grid"><TicketsTable tickets={visibleTickets} onOpenDetails={onOpenDetails} pendingTicketId={pendingTicketId} activeStatus={selectedStatus} totalTicketCount={tickets.length} onClearStatusFilter={() => setSelectedStatus(null)} /></div><div className="dashboard-lower-grid"><TicketBreakdown tickets={tickets} /><ActivityPanel events={activity} /></div></>;
 }
 
@@ -388,11 +419,12 @@ function IncidentMutationToast({ notice, onClose }) {
   const Icon = isLoading ? CircleDashed : isError || isWarning ? AlertCircle : Check;
   const similarCase = notice.guide?.similar_case;
   const steps = notice.guide?.steps || [];
-  return <aside className={`incident-mutation-toast toast-${notice.type}`} role={isError ? 'alert' : 'status'} aria-live={isLoading ? 'polite' : 'assertive'}>
+  return <aside className={`incident-mutation-toast toast-${notice.type}`} role={isError ? 'alert' : 'status'} aria-live={isLoading || notice.guideLoading ? 'polite' : 'assertive'}>
     <span className="incident-mutation-icon"><Icon size={17} className={isLoading ? 'is-spinning' : ''} /></span>
     <div className="incident-mutation-content">
       <strong>{notice.title}</strong>
       <span>{notice.detail}</span>
+      {notice.guideLoading && <span className="incident-toast-guide-loading"><CircleDashed size={12} className="is-spinning" /> Finding a relevant investigation reference…</span>}
       {notice.type === 'success' && notice.guide && <div className="incident-toast-guidance">
         <b>{notice.guide.opening || `Hi ${notice.guide.assignee || ''} — here’s a place to start.`}</b>
         {similarCase && <p><span>Similar reference</span>{similarCase.issue_summary}</p>}
@@ -413,38 +445,98 @@ function PolicyDashboard({ onModal }) {
 export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
   const [modal, setModal] = useState('');
   const [mutationNotice, setMutationNotice] = useState(null);
+  const mutationNoticeId = useRef(null);
   const [pendingTicketId, setPendingTicketId] = useState('');
   const [incidentState, setIncidentState] = useState({ tickets: [], activity: [] });
   const [incidentError, setIncidentError] = useState('');
   const [incidentLoading, setIncidentLoading] = useState(false);
+  const [incidentRefreshing, setIncidentRefreshing] = useState(false);
+  const [incidentLastUpdated, setIncidentLastUpdated] = useState(incidentSnapshotCache.fetchedAt || null);
   const isIncident = page === 'incidents';
 
   useEffect(() => {
-    if (!mutationNotice || mutationNotice.type === 'loading' || mutationNotice.guide) return undefined;
+    if (!mutationNotice || mutationNotice.type === 'loading' || mutationNotice.guideLoading || mutationNotice.guide) return undefined;
     const timer = window.setTimeout(() => setMutationNotice(null), 7000);
     return () => window.clearTimeout(timer);
   }, [mutationNotice]);
 
-  async function refreshIncidentState() {
-    setIncidentLoading(true);
-    setIncidentError('');
+  async function refreshIncidentState({ force = false } = {}) {
+    const hasCachedSnapshot = Boolean(incidentSnapshotCache.snapshot);
+    if (hasCachedSnapshot) {
+      setIncidentState(incidentSnapshotCache.snapshot);
+      setIncidentError('');
+      setIncidentLastUpdated(incidentSnapshotCache.fetchedAt);
+    }
+    if (hasCachedSnapshot) setIncidentRefreshing(true);
+    else setIncidentLoading(true);
     try {
-      const response = await fetch(`/api/incidents?current_user=${encodeURIComponent(currentUser || '')}`);
-      const payload = await readIncidentResponse(response);
-      if (!response.ok) throw new Error(payload.error || 'Could not load incident tickets.');
-      setIncidentState({ tickets: payload.tickets || [], activity: payload.activity || [] });
+      const snapshot = await loadIncidentSnapshot({ force });
+      setIncidentState(snapshot);
+      setIncidentLastUpdated(incidentSnapshotCache.fetchedAt);
+      setIncidentError('');
       return true;
     } catch (error) {
-      setIncidentError(error.message || 'Could not load incident tickets from Databricks.');
+      if (!incidentSnapshotCache.snapshot) setIncidentError(error.message || 'Could not load incident tickets from Databricks.');
+      else setMutationNotice({ type: 'warning', title: 'Showing the last loaded tickets', detail: 'The latest refresh could not complete. Try refreshing again in a moment.' });
       return false;
     } finally {
       setIncidentLoading(false);
+      setIncidentRefreshing(false);
     }
   }
 
   useEffect(() => {
-    if (isIncident) refreshIncidentState();
+    if (!isIncident) return undefined;
+    refreshIncidentState();
+    const refreshTimer = window.setInterval(() => refreshIncidentState({ force: true }), 60_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - incidentSnapshotCache.fetchedAt >= INCIDENT_CACHE_TTL_MS) {
+        refreshIncidentState({ force: true });
+      }
+    };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [isIncident, currentUser]);
+
+  function applyConfirmedMutation(ticket, operation, payload) {
+    const current = incidentSnapshotCache.snapshot || incidentState;
+    let tickets = current.tickets;
+    if (payload.ticket) {
+      const exists = tickets.some((item) => item.ticket_id === payload.ticket.ticket_id);
+      tickets = exists
+        ? tickets.map((item) => item.ticket_id === payload.ticket.ticket_id ? payload.ticket : item)
+        : [payload.ticket, ...tickets].slice(0, 200);
+    } else if (operation === 'decline') {
+      tickets = tickets.filter((item) => item.ticket_id !== ticket.ticket_id);
+    }
+    const next = { tickets, activity: payload.activity || current.activity };
+    incidentSnapshotCache.snapshot = next;
+    incidentSnapshotCache.fetchedAt = Date.now();
+    setIncidentLastUpdated(incidentSnapshotCache.fetchedAt);
+    setIncidentState(next);
+  }
+
+  async function loadMutationGuidance(ticket, noticeId) {
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'investigation_guidance', ticket_id: ticket.ticket_id }),
+      });
+      const payload = await readIncidentResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'Suggested investigation steps could not be loaded.');
+      if (mutationNoticeId.current === noticeId) {
+        setMutationNotice((notice) => notice?.noticeId === noticeId ? { ...notice, guideLoading: false, guide: payload.resolution_guidance } : notice);
+      }
+    } catch {
+      if (mutationNoticeId.current === noticeId) {
+        setMutationNotice((notice) => notice?.noticeId === noticeId ? { ...notice, guideLoading: false, detail: `${notice.detail} Investigation guidance is unavailable right now.` } : notice);
+      }
+    }
+  }
 
   async function mutateTicket(ticket, operation, extra = {}) {
     if (pendingTicketId) return;
@@ -472,14 +564,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
         requestError.status = response.status;
         throw requestError;
       }
-      setMutationNotice({ type: 'loading', title: `${ticket.ticket_id} saved`, detail: 'Refreshing the dashboard, ticket status, and recent activity.' });
-      const refreshed = await refreshIncidentState();
-      if (!refreshed) {
-        setMutationNotice({ type: 'warning', title: 'Update saved; refresh needed', detail: `${ticket.ticket_id} was updated, but the dashboard could not refresh. Use Try again to reload the latest data.` });
-        return;
-      }
-      const visibleProgressTime = Math.max(0, 650 - (Date.now() - startedAt));
-      if (visibleProgressTime) await new Promise((resolve) => window.setTimeout(resolve, visibleProgressTime));
+      applyConfirmedMutation(ticket, operation, payload);
       const updatedTicket = payload.ticket || {};
       let title = `${ticket.ticket_id} updated successfully`;
       let detail = 'The dashboard and recent activity are up to date.';
@@ -488,22 +573,21 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
         const assignee = updatedTicket.assigned_to || extra.assignee;
         title = `${ticket.ticket_id} assigned to ${assignee}`;
         detail = `The ticket and activity history are up to date for ${assignee}.`;
-        if (payload.resolution_guidance) {
-          setMutationNotice({ type: 'success', title, detail, guide: payload.resolution_guidance });
-          return;
-        }
-        if (payload.resolution_guidance_error) detail += ' Suggested investigation steps are unavailable right now.';
       }
       if (operation === 'unassign' && payload.no_op) {
         title = `${ticket.ticket_id} was already unassigned`;
         detail = 'The latest ticket record was already unassigned; the dashboard and activity have been refreshed.';
       } else if (operation === 'unassign') detail = 'The ticket is back in the unassigned queue.';
       if (operation === 'decline') detail = 'The ticket was removed from the active queue and recorded in recent activity.';
-      setMutationNotice({ type: 'success', title, detail });
+      const noticeId = crypto.randomUUID();
+      mutationNoticeId.current = noticeId;
+      const shouldLoadGuide = Boolean(payload.resolution_guidance_pending && payload.ticket);
+      setMutationNotice({ type: 'success', title, detail, noticeId, guideLoading: shouldLoadGuide });
+      if (shouldLoadGuide) void loadMutationGuidance(payload.ticket, noticeId);
     } catch (error) {
       if ([403, 409, 502].includes(error.status)) {
         setMutationNotice({ type: 'loading', title: `Checking ${ticket.ticket_id}`, detail: 'Refreshing the latest ticket owner, status, and activity.' });
-        await refreshIncidentState();
+        await refreshIncidentState({ force: true });
       }
       setMutationNotice({ type: 'error', title: 'Ticket update failed', detail: error.message || 'The ticket could not be updated. Please try again.' });
     } finally {
@@ -520,10 +604,10 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
 
   return <section className="dashboard-page">
     <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} /></div>
-    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={refreshIncidentState}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onModal={(message) => setModal({ type: 'notice', message })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
+    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
       <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Databricks</p>
     </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onLogin={onLogin} currentUser={currentUser} />
-    {isIncident && <IncidentMutationToast notice={mutationNotice} onClose={() => setMutationNotice(null)} />}
+    {isIncident && <IncidentMutationToast notice={mutationNotice} onClose={() => { mutationNoticeId.current = null; setMutationNotice(null); }} />}
   </section>;
 }
 
