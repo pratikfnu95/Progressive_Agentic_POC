@@ -108,7 +108,7 @@ function DashboardHeader({ title, subtitle, onCreate, onRefresh, refreshing = fa
     <header className="dashboard-header">
       <div><div className="dashboard-title-line"><h1>{title}</h1></div><p>{subtitle}</p></div>
       <div className="dashboard-header-actions">
-        {onRefresh && <button type="button" className="dashboard-refresh-button" onClick={onRefresh} disabled={refreshing} aria-label="Refresh incident data" title={lastUpdated ? `Last refreshed ${formatIncidentTimestamp(lastUpdated)}` : 'Refresh incident data'}><RefreshCw size={15} className={refreshing ? 'is-refreshing' : ''} /><span>{refreshing ? 'Refreshing' : 'Refresh'}</span></button>}
+        {onRefresh && <button type="button" className="dashboard-refresh-button" onClick={onRefresh} disabled={refreshing} aria-label={refreshing ? 'Refreshing incident data' : 'Refresh incident data'} title={lastUpdated ? `Refresh incident data · Last refreshed ${formatIncidentTimestamp(lastUpdated)}` : 'Refresh incident data'}><RefreshCw size={16} className={refreshing ? 'is-refreshing' : ''} /></button>}
         {onCreate && <button className="dashboard-primary-button" onClick={onCreate}><Plus size={17} />Create New Ticket</button>}
       </div>
     </header>

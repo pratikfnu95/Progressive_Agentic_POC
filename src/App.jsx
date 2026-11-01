@@ -739,7 +739,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
           <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
           <span>Policy Dashboard</span>
         </button>
-        <button className={`side-action${currentPage === 'guide' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('guide')}>
+        <button className={`side-action${currentPage === 'guide' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('guide')} title="POC walkthrough, current capabilities, and architecture" aria-current={currentPage === 'guide' ? 'page' : undefined}>
           <BookOpenText size={18} strokeWidth={1.8} />
           <span>How this works</span>
         </button>
@@ -1206,7 +1206,7 @@ function App() {
         {currentPage === 'guide' ? (
           <>
             <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
-            <HowItWorksPage onUsePrompt={openPromptInChat} />
+            <HowItWorksPage onUsePrompt={openPromptInChat} onNavigate={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }} />
           </>
         ) : currentPage !== 'chat' ? (
           <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} />
