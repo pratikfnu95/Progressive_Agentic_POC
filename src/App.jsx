@@ -10,6 +10,7 @@ import {
   CircleDashed,
   ClipboardList,
   Copy,
+  ChevronRight,
   DollarSign,
   Timer,
   History,
@@ -84,7 +85,7 @@ function WelcomePromptChips({ onSelect }) {
         {welcomeStarters.filter((starter) => starter.category === category).map(({ prompt, Icon }) => <button type="button" className="welcome-starter" key={prompt} onClick={() => onSelect(prompt)}>
           <Icon size={16} aria-hidden="true" />
           <span><strong>{prompt}</strong></span>
-          <ArrowUp size={14} aria-hidden="true" />
+          <ChevronRight size={18} strokeWidth={2.5} aria-hidden="true" />
         </button>)}
       </div>)}
     </div>
@@ -727,15 +728,15 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
       </div>
 
       <nav className="sidebar-actions" aria-label="Main navigation">
-        <button className="side-action side-action-primary" onClick={onNewChat}>
+        <button className={`side-action side-action-primary${currentPage === 'chat' && !activeChatId ? ' side-action-selected' : ''}`} onClick={onNewChat} aria-current={currentPage === 'chat' && !activeChatId ? 'page' : undefined} title="Start a new conversation">
           <SquarePen size={23} strokeWidth={2} />
           <span>New chat</span>
         </button>
-        <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')}>
+        <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')} aria-current={currentPage === 'incidents' ? 'page' : undefined} title="View incident tickets and activity">
           <ClipboardList size={18} strokeWidth={1.8} />
           <span>Incident Management</span>
         </button>
-        <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')}>
+        <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')} aria-current={currentPage === 'policies' ? 'page' : undefined} title="View policy insights">
           <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
           <span>Policy Dashboard</span>
         </button>
@@ -755,6 +756,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
                 key={chat.id}
                 onClick={() => setActiveChatId(chat.id)}
                 title={chat.title}
+                aria-current={activeChatId === chat.id ? 'page' : undefined}
               >
                 <span>{chat.title}</span>
               </button>
