@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime
 from decimal import Decimal
+from functools import wraps
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 from backend.databricks_connector import open_connection
@@ -24,6 +28,7 @@ ASSIGNABLE = {"Pratik", "Sarvesh", "Madhu", "Saurabh"}
 KNOWN_TEAM_NAMES = ["Pratik", "Sarvesh", "Madhu", "Saurabh", "Admin"]
 TICKET_ID_RE = re.compile(r"^INC[0-9]{7}$", re.IGNORECASE)
 PROMPT_PATH = Path(__file__).with_name("prompts") / "incident_intent.md"
+_DATABASE_CONTEXT: ContextVar[dict | None] = ContextVar("incident_database_context", default=None)
 
 
 class IncidentError(RuntimeError):
@@ -49,23 +54,61 @@ def _rows(cursor) -> list[dict]:
     return [dict(zip(names, (_json_value(value) for value in row))) for row in cursor.fetchall()]
 
 
+@contextmanager
+def _database_scope():
+    """Share one warehouse connection across the reads/writes in one operation."""
+    current = _DATABASE_CONTEXT.get()
+    if current is not None:
+        yield current
+        return
+    with open_connection() as connection:
+        state = {"connection": connection, "timeout_set": False, "members": None}
+        token = _DATABASE_CONTEXT.set(state)
+        try:
+            yield state
+        finally:
+            _DATABASE_CONTEXT.reset(token)
+
+
+def _with_database(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _database_scope():
+            return function(*args, **kwargs)
+    return wrapped
+
+
 def _query(sql: str) -> list[dict]:
-    with open_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SET STATEMENT_TIMEOUT = 30")
+    started = perf_counter()
+    with _database_scope() as state:
+        with state["connection"].cursor() as cursor:
+            if not state["timeout_set"]:
+                cursor.execute("SET STATEMENT_TIMEOUT = 30")
+                state["timeout_set"] = True
             cursor.execute(sql)
-            return _rows(cursor)
+            rows = _rows(cursor)
+    LOGGER.debug("Databricks incident read completed duration_ms=%d rows=%d", round((perf_counter() - started) * 1000), len(rows))
+    return rows
 
 
 def _execute(sql: str) -> None:
-    with open_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SET STATEMENT_TIMEOUT = 30")
+    started = perf_counter()
+    with _database_scope() as state:
+        with state["connection"].cursor() as cursor:
+            if not state["timeout_set"]:
+                cursor.execute("SET STATEMENT_TIMEOUT = 30")
+                state["timeout_set"] = True
             cursor.execute(sql)
+    LOGGER.debug("Databricks incident write completed duration_ms=%d", round((perf_counter() - started) * 1000))
 
 
 def list_members() -> list[dict]:
+    state = _DATABASE_CONTEXT.get()
+    if state is not None and state["members"] is not None:
+        return state["members"]
     rows = _query(f"SELECT user_id, display_name, role, is_active FROM {MEMBERS} WHERE is_active = true")
+    if state is not None:
+        state["members"] = rows
     return rows
 
 
@@ -192,6 +235,7 @@ def _activity_message(event: dict, actor: str, names: dict[str, str]) -> str:
     return f"{text} by {actor}"
 
 
+@_with_database
 def dashboard_snapshot() -> dict:
     return {"tickets": _tickets("all"), "activity": list_activity(limit=6)}
 
@@ -242,6 +286,7 @@ def _require_ticket_permission(ticket: dict, actor: dict, *, allow_unassigned=Fa
         raise IncidentError("Acknowledge this unassigned ticket before changing its status.", 403)
 
 
+@_with_database
 def _apply_action(ticket_id: str, actor: dict, operation: str, *, assignee_name=None, status=None) -> dict:
     ticket = _get_ticket(ticket_id)
     if not ticket.get("is_active"):
@@ -288,6 +333,11 @@ def _apply_action(ticket_id: str, actor: dict, operation: str, *, assignee_name=
         )
         _record_event(ticket_id.upper(), actor, "STATUS_CHANGED", from_status=old_status, to_status=status)
     elif operation == "unassign":
+        # The dashboard can be stale if another session already unassigned
+        # the ticket. Treat that repeat request as an idempotent no-op so the
+        # caller can refresh its snapshot instead of presenting a false error.
+        if not old_assignee:
+            return {"ticket": ticket, "activity": list_activity(limit=6), "no_op": True}
         _require_ticket_permission(ticket, actor)
         _execute(
             f"UPDATE {TICKETS} SET assigned_to_user_id = NULL, ticket_status = 'Unassigned', "
@@ -305,7 +355,7 @@ def _apply_action(ticket_id: str, actor: dict, operation: str, *, assignee_name=
     else:
         raise IncidentError("Unsupported ticket action.")
     updated = _get_ticket(ticket_id.upper()) if operation != "decline" else None
-    return {"ticket": updated, "activity": list_activity()}
+    return {"ticket": updated, "activity": list_activity(limit=6)}
 
 
 def handle_incident_request(payload: dict) -> dict:
@@ -315,15 +365,25 @@ def handle_incident_request(payload: dict) -> dict:
         return {"kind": "snapshot", **dashboard_snapshot()}
     current_user = str(payload.get("current_user", "")).strip()
     actor = None
+    if action == "investigation_guidance":
+        if not current_user:
+            raise IncidentError("Sign in to view investigation guidance.", 401)
+        with _database_scope():
+            actor = _member(current_user)
+            ticket = _get_ticket(str(payload.get("ticket_id", "")).strip().upper())
+            if actor["role"] != "ADMIN" and str(ticket.get("assigned_to_user_id") or "") != str(actor["user_id"]):
+                raise IncidentError("Investigation guidance is available to the assigned owner or Admin.", 403)
+        return {"kind": "investigation_guidance", "investigation_action": True, "ticket": ticket}
     if action == "mutate":
         if not current_user:
             raise IncidentError("Sign in to change incident tickets.", 401)
-        actor = _member(current_user)
-        operation = str(payload.get("operation", ""))
-        result = _apply_action(
-            str(payload.get("ticket_id", "")), actor, operation,
-            assignee_name=payload.get("assignee"), status=payload.get("status"),
-        )
+        with _database_scope():
+            actor = _member(current_user)
+            operation = str(payload.get("operation", ""))
+            result = _apply_action(
+                str(payload.get("ticket_id", "")), actor, operation,
+                assignee_name=payload.get("assignee"), status=payload.get("status"),
+            )
         return {"kind": "action_complete", "assignment_action": operation in {"assign_to_me", "assign_to_user", "acknowledge_assign"}, **result}
     if action != "chat":
         raise IncidentError("Unknown incident API action.")
@@ -336,39 +396,42 @@ def handle_incident_request(payload: dict) -> dict:
         return {"kind": "clarification", "message": str(intent.get("question", "Which ticket or action do you mean?"))}
     if name == "list_tickets":
         filter_name = str(intent.get("filter", "all"))
-        actor = _member(current_user) if current_user else None
-        if filter_name == "mine" and not actor:
-            raise IncidentError("Sign in to see tickets assigned to you.", 401)
-        tickets = _tickets(filter_name, current_user=actor, assignee_name=intent.get("assignee"), ticket_id=intent.get("ticket_id"))
-        return {"kind": "ticket_list", "summary": str(intent.get("summary", "Here are the matching tickets.")), "tickets": tickets, "activity": list_activity()}
+        with _database_scope():
+            actor = _member(current_user) if current_user else None
+            if filter_name == "mine" and not actor:
+                raise IncidentError("Sign in to see tickets assigned to you.", 401)
+            tickets = _tickets(filter_name, current_user=actor, assignee_name=intent.get("assignee"), ticket_id=intent.get("ticket_id"))
+            activity = list_activity(limit=6)
+        return {"kind": "ticket_list", "summary": str(intent.get("summary", "Here are the matching tickets.")), "tickets": tickets, "activity": activity}
     if not current_user:
         raise IncidentError("Sign in to manage incident tickets.", 401)
-    actor = _member(current_user)
-    ticket_id = str(intent.get("ticket_id", "")).strip().upper()
-    if not ticket_id:
-        return {"kind": "clarification", "message": "Which ticket number should I use?"}
-    ticket = _get_ticket(ticket_id)
-    if name == "change_status":
-        if not ticket.get("is_active"):
-            raise IncidentError("This ticket is no longer active and cannot be changed.", 409)
-        _require_ticket_permission(ticket, actor)
-        return {"kind": "status_selection", "summary": f"Choose a status for {ticket_id}.", "ticket": ticket,
-                "statuses": ["In Progress", "Blocked", "Waiting for Info", "Completed"]}
-    if name == "decline":
-        _require_ticket_permission(ticket, actor, allow_unassigned=True)
-        result = _apply_action(ticket_id, actor, "decline")
-        return {"kind": "action_complete", "message": f"{ticket_id} was declined.", **result}
-    if name == "assign":
-        requested = str(intent.get("assignee") or "").strip()
-        if requested.lower() == "me":
-            result = _apply_action(ticket_id, actor, "assign_to_me")
-        elif requested:
-            if actor["role"] != "ADMIN" and ticket.get("assigned_to_user_id") != actor["user_id"]:
-                raise IncidentError("Only the ticket owner or Admin can reassign an assigned ticket.", 403)
-            result = _apply_action(ticket_id, actor, "assign_to_user", assignee_name=requested)
-        else:
-            return {"kind": "assignee_selection", "summary": f"Choose an owner for {ticket_id}.", "ticket": ticket,
-                    "assignees": sorted(ASSIGNABLE)}
+    with _database_scope():
+        actor = _member(current_user)
+        ticket_id = str(intent.get("ticket_id", "")).strip().upper()
+        if not ticket_id:
+            return {"kind": "clarification", "message": "Which ticket number should I use?"}
+        ticket = _get_ticket(ticket_id)
+        if name == "change_status":
+            if not ticket.get("is_active"):
+                raise IncidentError("This ticket is no longer active and cannot be changed.", 409)
+            _require_ticket_permission(ticket, actor)
+            return {"kind": "status_selection", "summary": f"Choose a status for {ticket_id}.", "ticket": ticket,
+                    "statuses": ["In Progress", "Blocked", "Waiting for Info", "Completed"]}
+        if name == "decline":
+            _require_ticket_permission(ticket, actor, allow_unassigned=True)
+            result = _apply_action(ticket_id, actor, "decline")
+            return {"kind": "action_complete", "message": f"{ticket_id} was declined.", **result}
+        if name == "assign":
+            requested = str(intent.get("assignee") or "").strip()
+            if requested.lower() == "me":
+                result = _apply_action(ticket_id, actor, "assign_to_me")
+            elif requested:
+                if actor["role"] != "ADMIN" and ticket.get("assigned_to_user_id") != actor["user_id"]:
+                    raise IncidentError("Only the ticket owner or Admin can reassign an assigned ticket.", 403)
+                result = _apply_action(ticket_id, actor, "assign_to_user", assignee_name=requested)
+            else:
+                return {"kind": "assignee_selection", "summary": f"Choose an owner for {ticket_id}.", "ticket": ticket,
+                        "assignees": sorted(ASSIGNABLE)}
         return {"kind": "action_complete", "assignment_action": True,
                 "message": f"{ticket_id} was assigned to {actor['display_name'] if requested.lower() == 'me' else requested}.", **result}
     raise IncidentError("I couldn't interpret that ticket request. Please rephrase it.", 422)

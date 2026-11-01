@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  CircleDashed,
   ClipboardList,
   Copy,
   DollarSign,
@@ -15,12 +16,11 @@ import {
   BookOpenText,
   Menu,
   PartyPopper,
-  Search,
   Sparkles,
   SquarePen,
   X,
 } from 'lucide-react';
-import { DashboardPage, UserAccountMenu } from './Dashboards.jsx';
+import { DashboardPage, UserAccountMenu, invalidateIncidentSnapshotCache } from './Dashboards.jsx';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 import { HowItWorksPage } from './HowItWorksPage.jsx';
 
@@ -372,6 +372,26 @@ function QueryResultsTable({ result }) {
   const [copyState, setCopyState] = useState('idle');
   const [selectedPolicy, setSelectedPolicy] = useState(null);
   const policyNumberIndex = findColumnIndex(result.columns, ['policy_number']);
+  const currencyColumnIndex = findColumnIndex(result.columns, ['currency', 'currency_code']);
+  const premiumIndex = findColumnIndex(result.columns, ['written_premium', 'written_premium_total', 'total_written_premium']);
+  const distinctPolicies = policyNumberIndex >= 0
+    ? new Set(result.rows.map((row) => row[policyNumberIndex]).filter((value) => value != null && String(value).trim()).map(String)).size
+    : 0;
+  let resultNarrative = '';
+  if (policyNumberIndex >= 0 && distinctPolicies > 0) {
+    resultNarrative = `I found ${distinctPolicies} distinct ${distinctPolicies === 1 ? 'policy' : 'policies'} in ${result.row_count} returned ${result.row_count === 1 ? 'row' : 'rows'}.`;
+  } else {
+    resultNarrative = `The query returned ${result.row_count} ${result.row_count === 1 ? 'row' : 'rows'} across ${result.columns.length} ${result.columns.length === 1 ? 'column' : 'columns'}.`;
+  }
+  if (premiumIndex >= 0 && !result.truncated && result.rows.length) {
+    const premiumValues = result.rows.map((row) => row[premiumIndex]);
+    const numericPremiums = premiumValues.map((value) => value == null || value === '' ? null : Number(value));
+    if (numericPremiums.some((value) => value !== null) && numericPremiums.every((value) => value === null || Number.isFinite(value))) {
+      const total = numericPremiums.reduce((sum, value) => sum + (value ?? 0), 0);
+      resultNarrative += ` Written premium across these rows totals ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(total)}.`;
+    }
+  }
+  if (result.truncated && premiumIndex >= 0) resultNarrative += ' Results are capped, so a full premium total is not shown.';
 
   useEffect(() => {
     if (!selectedPolicy) return undefined;
@@ -410,7 +430,9 @@ function QueryResultsTable({ result }) {
   }
 
   return (
-    <section className="query-results" aria-label="Query results">
+    <>
+      <p className="result-narrative">{resultNarrative}</p>
+      <section className="query-results" aria-label="Query results">
       <div className="results-heading">
         <div className="results-summary">
           <strong>Results</strong>
@@ -431,12 +453,22 @@ function QueryResultsTable({ result }) {
       </div>
       <div className="results-table-wrap">
         <table>
-          <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+          <thead><tr>{result.columns.map((column, columnIndex) => {
+            const { isDate } = resultColumnKind(column);
+            const numeric = isNumericResultColumn(column, result.rows, columnIndex);
+            return <th className={numeric ? 'is-numeric' : isDate ? 'is-date' : ''} scope="col" key={column}>{column}</th>;
+          })}</tr></thead>
           <tbody>
             {result.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{columnIndex === policyNumberIndex && value != null && String(value).trim()
+              <tr key={rowIndex}>{row.map((value, columnIndex) => {
+                const column = result.columns[columnIndex];
+                const { isDate } = resultColumnKind(column);
+                const numeric = isNumericResultColumn(column, result.rows, columnIndex);
+                const className = numeric ? 'is-numeric' : isDate ? 'is-date' : '';
+                return <td className={className} key={columnIndex} title={value == null ? undefined : String(value)}>{columnIndex === policyNumberIndex && value != null && String(value).trim()
                 ? <button type="button" className="result-policy-link" onClick={() => setSelectedPolicy({ columns: result.columns, row })}>{String(value)}</button>
-                : value == null ? '—' : String(value)}</td>)}</tr>
+                : formatResultCell(value, column, row, currencyColumnIndex)}</td>;
+              })}</tr>
             ))}
           </tbody>
         </table>
@@ -449,7 +481,8 @@ function QueryResultsTable({ result }) {
           <footer>Details are limited to the columns returned by this query.</footer>
         </section>
       </div>}
-    </section>
+      </section>
+    </>
   );
 }
 
@@ -466,6 +499,57 @@ function FollowupSuggestions({ questions, loading, onSelect }) {
     <h3><Sparkles size={14} />Explore this result</h3>
     <div>{questions.map((question) => <button type="button" key={question} onClick={() => onSelect(question)}>{question}<ArrowUp size={14} aria-hidden="true" /></button>)}</div>
   </section>;
+}
+
+function resultColumnKind(columnName) {
+  const column = normalizeColumnName(columnName);
+  const isDate = /(date|timestamp|datetime|createdat|updatedat|lastupdated|effective|expiration)/.test(column);
+  const isIdentifier = /(policy|ticket|incident|transaction|coverage)?(id|number|code)$/.test(column);
+  const isCurrency = !isIdentifier && /(premium|charge|fee|surcharge|payroll|balance|amount|cost|deductible|limit)/.test(column);
+  return { isDate, isCurrency, isIdentifier };
+}
+
+function isNumericResultColumn(columnName, rows, columnIndex) {
+  const { isDate, isCurrency, isIdentifier } = resultColumnKind(columnName);
+  if (isDate || isIdentifier) return false;
+  if (isCurrency) return true;
+  return rows.some((row) => {
+    const value = row?.[columnIndex];
+    return typeof value === 'number' || (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value.replace(/,/g, ''))));
+  });
+}
+
+function formatResultCell(value, columnName, row, currencyColumnIndex) {
+  if (value === null || value === undefined || value === '') return '—';
+  const { isDate, isCurrency, isIdentifier } = resultColumnKind(columnName);
+  if (isDate && typeof value === 'string') {
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const date = new Date(dateOnly ? `${value}T12:00:00` : value);
+    if (!Number.isNaN(date.getTime())) {
+      const options = { month: 'short', day: 'numeric', year: 'numeric' };
+      if (!dateOnly && /(?:T|\s)\d{2}:\d{2}/i.test(value)) {
+        options.hour = 'numeric';
+        options.minute = '2-digit';
+      }
+      return new Intl.DateTimeFormat('en-US', options).format(date);
+    }
+  }
+
+  const numericValue = !isIdentifier && (typeof value === 'number' ? value : (typeof value === 'string' && value.trim() !== '' ? Number(value.replace(/,/g, '')) : NaN));
+  if (Number.isFinite(numericValue)) {
+    if (isCurrency) {
+      const currency = currencyColumnIndex >= 0 && /^[A-Z]{3}$/.test(String(row[currencyColumnIndex] || '').toUpperCase())
+        ? String(row[currencyColumnIndex]).toUpperCase()
+        : 'USD';
+      try {
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 2 }).format(numericValue);
+      } catch {
+        return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(numericValue);
+      }
+    }
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(numericValue);
+  }
+  return String(value);
 }
 
 const incidentChatStatuses = ['In Progress', 'Blocked', 'Waiting for Info', 'Completed'];
@@ -552,7 +636,7 @@ function IncidentConversationResult({ result, currentUser, onAction }) {
   const [selectedTicket, setSelectedTicket] = useState(null);
   if (!result) return null;
   if (result.kind === 'clarification') return null;
-  if (result.kind === 'action_complete') return <><IncidentActionFeedback feedback={{ tone: 'green', icon: 'completed', title: result.message || 'Ticket updated successfully.', detail: result.ticket && `${result.ticket.ticket_id} · ${result.ticket.ticket_status} · ${result.ticket.assigned_to || 'Unassigned'}` }} /><IncidentResolutionGuide guide={result.resolution_guidance} error={result.resolution_guidance_error} /></>;
+  if (result.kind === 'action_complete') return <><IncidentActionFeedback feedback={{ tone: 'green', icon: 'completed', title: result.message || 'Ticket updated successfully.', detail: result.ticket && `${result.ticket.ticket_id} · ${result.ticket.ticket_status} · ${result.ticket.assigned_to || 'Unassigned'}` }} />{result.resolution_guidance_pending && <div className="incident-chat-guide-loading"><CircleDashed size={14} /> Preparing an investigation reference…</div>}<IncidentResolutionGuide guide={result.resolution_guidance} error={result.resolution_guidance_error} /></>;
 
   function ticketCard(ticket) {
     const canManage = currentUser === 'Admin' || ticket.assigned_to === currentUser;
@@ -636,18 +720,6 @@ function SidebarArtwork() {
 }
 
 function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, currentPage, setCurrentPage }) {
-  const [searching, setSearching] = useState(false);
-  const [searchText, setSearchText] = useState('');
-  const searchRef = useRef(null);
-
-  useEffect(() => {
-    if (searching) searchRef.current?.focus();
-  }, [searching]);
-
-  const visibleChats = chats.filter((chat) =>
-    chat.title.toLowerCase().includes(searchText.toLowerCase()),
-  );
-
   return (
     <aside id="app-sidebar" className={`sidebar${mobileOpen ? ' is-mobile-open' : ''}`}>
       <div className="sidebar-topline">
@@ -659,30 +731,6 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
           <SquarePen size={23} strokeWidth={2} />
           <span>New chat</span>
         </button>
-        {searching ? (
-          <div className="side-search">
-            <Search size={18} />
-            <input
-              ref={searchRef}
-              value={searchText}
-              onChange={(event) => setSearchText(event.target.value)}
-              placeholder="Search conversations"
-              aria-label="Search conversations"
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  setSearching(false);
-                  setSearchText('');
-                }
-              }}
-            />
-            <button className="tiny-icon" onClick={() => { setSearching(false); setSearchText(''); }} aria-label="Close search"><X size={15} /></button>
-          </div>
-        ) : (
-          <button className="side-action" onClick={() => setSearching(true)}>
-            <Search size={18} strokeWidth={1.8} />
-            <span>Search chats</span>
-          </button>
-        )}
         <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')}>
           <ClipboardList size={18} strokeWidth={1.8} />
           <span>Incident Management</span>
@@ -699,9 +747,9 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
 
       <div className="chat-history">
         <div className="history-label"><History size={14} /> Recent conversations</div>
-        {visibleChats.length > 0 ? (
+        {chats.length > 0 ? (
           <div className="chat-list">
-            {visibleChats.map((chat) => (
+            {chats.map((chat) => (
               <button
                 className={`chat-history-item${activeChatId === chat.id ? ' selected' : ''}`}
                 key={chat.id}
@@ -713,7 +761,7 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
             ))}
           </div>
         ) : (
-          <div className="empty-history">{searchText ? 'No conversations found' : 'Your conversations will appear here'}</div>
+          <div className="empty-history">Your conversations will appear here</div>
         )}
       </div>
       <SidebarArtwork />
@@ -847,6 +895,38 @@ function App() {
       : chat));
   }
 
+  async function loadChatIncidentGuidance(chatId, messageId, ticketId) {
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'investigation_guidance', ticket_id: ticketId }),
+      });
+      const payload = await readApiResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'Suggested investigation steps could not be loaded.');
+      setChats((current) => current.map((chat) => chat.id !== chatId ? chat : {
+        ...chat,
+        messages: chat.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          if (message.incidentFeedback) return { ...message, incidentFeedback: { ...message.incidentFeedback, resolutionGuideLoading: false, resolutionGuide: payload.resolution_guidance } };
+          if (message.incidentResult) return { ...message, incidentResult: { ...message.incidentResult, resolution_guidance_pending: false, resolution_guidance: payload.resolution_guidance } };
+          return message;
+        }),
+      }));
+    } catch {
+      setChats((current) => current.map((chat) => chat.id !== chatId ? chat : {
+        ...chat,
+        messages: chat.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          const error = 'The ticket was updated, but investigation guidance is unavailable right now.';
+          if (message.incidentFeedback) return { ...message, incidentFeedback: { ...message.incidentFeedback, resolutionGuideLoading: false, resolutionGuideError: error } };
+          if (message.incidentResult) return { ...message, incidentResult: { ...message.incidentResult, resolution_guidance_pending: false, resolution_guidance_error: error } };
+          return message;
+        }),
+      }));
+    }
+  }
+
   async function submitAccessCode(event) {
     event.preventDefault();
     setAccessError('');
@@ -936,6 +1016,9 @@ function App() {
           responseDurationMs: Date.now() - assistantMessage.startedAt,
           incidentResult: incidentPayload,
         });
+        if (incidentPayload.resolution_guidance_pending && incidentPayload.ticket?.ticket_id) {
+          void loadChatIncidentGuidance(id, assistantId, incidentPayload.ticket.ticket_id);
+        }
         return;
       }
       const response = await fetch('/api/chat', {
@@ -993,6 +1076,7 @@ function App() {
       });
       const payload = await readApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'The ticket could not be updated.');
+      if (payload.kind === 'action_complete') invalidateIncidentSnapshotCache();
       const status = payload.ticket?.ticket_status || (operation === 'decline' ? 'Declined' : 'Updated');
       const tone = status === 'Blocked' || status === 'Declined' ? 'red' : status === 'Completed' ? 'green' : status === 'Waiting for Info' ? 'purple' : 'blue';
       const icon = status === 'Blocked' || status === 'Declined' ? 'blocked' : status === 'Completed' ? 'completed' : 'party';
@@ -1006,7 +1090,7 @@ function App() {
       setChats((current) => current.map((chat) => chat.id !== chatId ? chat : {
         ...chat,
         messages: chat.messages.map((item) => {
-          if (item.id === actionId) return { ...item, content: '', status: 'completed', responseDurationMs: Date.now() - startedAt, incidentFeedback: { tone, icon, title: outcome, detail, resolutionGuide: payload.resolution_guidance, resolutionGuideError: payload.resolution_guidance_error } };
+          if (item.id === actionId) return { ...item, content: '', status: 'completed', responseDurationMs: Date.now() - startedAt, incidentFeedback: { tone, icon, title: outcome, detail, resolutionGuide: payload.resolution_guidance, resolutionGuideLoading: Boolean(payload.resolution_guidance_pending), resolutionGuideError: payload.resolution_guidance_error } };
           if (item.id !== message.id) return item;
           const prior = item.incidentResult || {};
           const oldTickets = prior.tickets || (prior.ticket ? [prior.ticket] : []);
@@ -1021,6 +1105,7 @@ function App() {
           return { ...item, incidentResult: nextResult };
         }),
       }));
+      if (payload.resolution_guidance_pending) void loadChatIncidentGuidance(chatId, actionId, ticketId);
     } catch (error) {
       updateMessage(chatId, actionId, { content: '', status: 'error', responseDurationMs: Date.now() - startedAt, incidentFeedback: { tone: 'red', icon: 'error', title: error.message || 'The ticket could not be updated.', detail: `No change was confirmed for ${ticketId}.` } });
     }
@@ -1161,7 +1246,7 @@ function App() {
                       {message.status === 'generating' && <div className="activity-progress-row"><ActivityStatus status="generating" /><ElapsedTimer startedAt={message.startedAt || Date.now()} /></div>}
                       {message.status === 'incident_updating' && <IncidentUpdatingStatus startedAt={message.startedAt || Date.now()} />}
                       {message.incidentResult && <ResponseTime durationMs={message.responseDurationMs} />}
-                      {message.incidentFeedback && <><ResponseTime durationMs={message.responseDurationMs} /><IncidentActionFeedback feedback={message.incidentFeedback} /><IncidentResolutionGuide guide={message.incidentFeedback.resolutionGuide} error={message.incidentFeedback.resolutionGuideError} /></>}
+                      {message.incidentFeedback && <><ResponseTime durationMs={message.responseDurationMs} /><IncidentActionFeedback feedback={message.incidentFeedback} />{message.incidentFeedback.resolutionGuideLoading && <div className="incident-chat-guide-loading"><CircleDashed size={14} /> Preparing an investigation reference…</div>}<IncidentResolutionGuide guide={message.incidentFeedback.resolutionGuide} error={message.incidentFeedback.resolutionGuideError} /></>}
                       {message.incidentResult && <IncidentConversationResult result={message.incidentResult} currentUser={currentUser} onAction={(ticket, operation, extra) => mutateIncidentFromChat(activeChat.id, message, ticket, operation, extra)} />}
                       {message.incidentBusyTicket && <ActivityStatus status="running" />}
                       {message.sql && (

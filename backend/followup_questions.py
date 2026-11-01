@@ -19,7 +19,7 @@ def _bounded_result_preview(columns: object, rows: object) -> dict:
 
     safe_columns = [str(column)[:100] for column in columns[:12]]
     safe_rows = []
-    for row in rows[:5]:
+    for row in rows[:12]:
         if not isinstance(row, list):
             continue
         safe_rows.append([
@@ -42,11 +42,24 @@ def generate_followup_questions(
         raise ValueError("The original question is empty or too long.")
 
     preview = _bounded_result_preview(columns, rows)
+    policy_column = next(
+        (index for index, column in enumerate(preview["columns"]) if column.lower().replace("-", "_") == "policy_number"),
+        None,
+    )
+    policy_numbers = []
+    if policy_column is not None:
+        for row in preview["rows"]:
+            value = row[policy_column] if policy_column < len(row) else None
+            if value is not None and str(value).strip() and str(value) not in policy_numbers:
+                policy_numbers.append(str(value))
+            if len(policy_numbers) == 20:
+                break
     system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
     context = {
         "original_question": cleaned_question,
         "returned_row_count": row_count if isinstance(row_count, int) else len(preview["rows"]),
         "result_preview": preview,
+        "policy_numbers_in_preview": policy_numbers,
         "available_gold_schema": schema_context[:20000] if isinstance(schema_context, str) else "",
         "verified_relationship_guidance": BUSINESS_GUIDANCE,
     }
