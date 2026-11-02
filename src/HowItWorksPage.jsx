@@ -6,6 +6,7 @@ import {
   BookOpenText,
   Braces,
   Check,
+  CircleAlert,
   CircleHelp,
   ClipboardList,
   Cloud,
@@ -16,15 +17,13 @@ import {
   MessageSquareText,
   Network,
   ShieldCheck,
-  Sparkles,
   Table2,
-  WandSparkles,
 } from 'lucide-react';
 
 const policyFlow = [
   { id: 'question', label: 'Your question', detail: 'Ask in everyday language, such as “Compare written premium by state.”', Icon: MessageSquareText, tag: 'YOU' },
   { id: 'api', label: 'Schema context', detail: 'FastAPI discovers columns and types for the five approved Gold tables and prepares relevant business guidance.', Icon: Network, tag: 'FASTAPI' },
-  { id: 'llm', label: 'SQL generation', detail: 'Vanna’s SQL workflow sends your question and schema context to the configured DeepSeek endpoint to draft Databricks SQL.', Icon: WandSparkles, tag: 'VANNA + DEEPSEEK' },
+  { id: 'llm', label: 'SQL generation', detail: 'Vanna’s SQL workflow sends your question and schema context to the configured DeepSeek endpoint to draft Databricks SQL.', Icon: Braces, tag: 'VANNA + DEEPSEEK' },
   { id: 'safety', label: 'Review & safeguards', detail: 'SQLGlot checks for one read-only SELECT against approved Gold tables, with a 200-row cap. Review the SQL and approve it before execution.', Icon: ShieldCheck, tag: 'REVIEW FIRST' },
   { id: 'warehouse', label: 'Databricks', detail: 'The approved query runs against the configured Databricks SQL Warehouse and approved tables.', Icon: Database, tag: 'SQL WAREHOUSE' },
   { id: 'result', label: 'Results & next steps', detail: 'The app displays actual rows returned by Databricks, the generated SQL, row count, and query time, followed by relevant follow-up suggestions when available.', Icon: Table2, tag: 'ACTUAL ROWS' },
@@ -46,7 +45,7 @@ const samplePrompts = [
 ];
 
 const futureOptions = [
-  { name: 'More model providers', detail: 'A provider adapter could support other approved LLMs, such as OpenAI or Claude, without changing the user workflow.', Icon: Sparkles },
+  { name: 'More model providers', detail: 'A provider adapter could support other approved LLMs, such as OpenAI or Claude, without changing the user workflow.', Icon: Network },
   { name: 'More data platforms', detail: 'Connector modules could extend data access to SQL Server, Azure SQL, or Snowflake after each source is configured and approved.', Icon: Database },
   { name: 'Richer knowledge retrieval', detail: 'A vector database could replace or augment the current local JSON lookup as verified, approved reference material grows.', Icon: FileSearch },
 ];
@@ -162,7 +161,7 @@ export function HowItWorksPage({ onUsePrompt, onNavigate }) {
           <article className="guide-boundary-card"><span className="guide-boundary-mark good"><Check size={15} /></span><div><h3>It can</h3><p>Query the configured policy data, show returned results, and manage supported incident ticket fields through the app.</p><p>Use a similar illustrative incident to suggest a few starting checks when a ticket is assigned.</p></div></article>
           <article className="guide-boundary-card"><span className="guide-boundary-mark note"><CircleHelp size={15} /></span><div><h3>It does not yet</h3><p>Connect to every enterprise data source, search a production vector database, or automatically diagnose and repair a data issue.</p><p>Suggested investigation steps are pointers to verify—not confirmed root causes or guaranteed fixes.</p></div></article>
         </div>
-        <div className="guide-sample-data-note"><Sparkles size={15} /><span>The incident resolution library currently contains <strong>illustrative synthetic examples</strong>, not verified historical Progressive resolutions. Validate suggested checks against current evidence and approved runbooks.</span></div>
+        <div className="guide-sample-data-note"><CircleAlert size={15} /><span>The incident resolution library currently contains <strong>illustrative synthetic examples</strong>, not verified historical Progressive resolutions. Validate suggested checks against current evidence and approved runbooks.</span></div>
       </section>
 
       <section className="guide-section guide-current-stack" aria-labelledby="guide-stack-title">
@@ -170,7 +169,7 @@ export function HowItWorksPage({ onUsePrompt, onNavigate }) {
         <div className="guide-stack-list">
           <div><span className="guide-stack-icon"><MessageSquareText size={17} /></span><span><strong>Web app</strong><small>React interface for chat, results, and dashboards</small></span><em>IN USE</em></div>
           <div><span className="guide-stack-icon"><Braces size={17} /></span><span><strong>Application backend</strong><small>FastAPI service for SQL workflow and incident requests</small></span><em>IN USE</em></div>
-          <div><span className="guide-stack-icon"><WandSparkles size={17} /></span><span><strong>SQL assistant</strong><small>Vanna workflow configured with DeepSeek for SQL generation</small></span><em>IN USE</em></div>
+          <div><span className="guide-stack-icon"><Braces size={17} /></span><span><strong>SQL assistant</strong><small>Vanna workflow configured with DeepSeek for SQL generation</small></span><em>IN USE</em></div>
           <div><span className="guide-stack-icon"><Database size={17} /></span><span><strong>Data platform</strong><small>Databricks SQL Warehouse and configured policy and incident tables</small></span><em>IN USE</em></div>
           <div><span className="guide-stack-icon"><FileSearch size={17} /></span><span><strong>Incident references</strong><small>Local JSON library of illustrative investigation patterns</small></span><em>POC DATA</em></div>
         </div>

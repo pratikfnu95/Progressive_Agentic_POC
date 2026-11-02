@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertCircle, ArrowLeft, ArrowUpRight, BadgeCheck, BookOpenCheck, CalendarDays,
   Check, ChevronDown, ChevronRight, CircleDashed, FileWarning, Filter,
-  Hand, LogIn, LogOut, Plus, RefreshCw, Search, ShieldAlert, Sparkles,
+  Hand, LogIn, LogOut, Plus, RefreshCw, Search, ShieldAlert,
   ArrowDown, ArrowUp, ArrowUpDown,
   Ticket, UserRound, X,
 } from 'lucide-react';
@@ -345,7 +345,7 @@ function IssueCategories() {
 function AssistantPanel({ onAction }) {
   const [question, setQuestion] = useState('');
   return <aside className="dashboard-assistant">
-    <div className="assistant-panel-heading"><Sparkles size={18} /><h2>AI Assistant</h2><ChevronDown size={16} /></div>
+    <div className="assistant-panel-heading"><h2>AI Assistant</h2><ChevronDown size={16} /></div>
     <p>Ask questions, investigate issues, or create and manage Remedy tickets.</p>
     <div className="assistant-shortcuts">{shortcuts.map(([Icon, title, description]) => <button key={title} onClick={() => onAction(title)}><span><Icon size={17} /></span><span><b>{title}</b><small>{description}</small></span></button>)}</div>
     <form className="assistant-ask" onSubmit={(event) => { event.preventDefault(); if (question.trim()) { onAction(`“${question.trim()}” — assistant actions are demo-only for now.`); setQuestion(''); } }}><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask a question or describe an issue..." aria-label="Ask the demo assistant" /><button disabled={!question.trim()} aria-label="Submit question"><ArrowUpRight size={17} /></button></form>
@@ -429,7 +429,6 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
   return <div className="dashboard-modal-backdrop" role="presentation" onClick={onClose}><section className={`dashboard-modal${['details', 'create_ticket'].includes(modal.type) ? ' dashboard-ticket-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title" onClick={(event) => event.stopPropagation()}>
     {hasPreviousModal && <button className="dashboard-modal-back" type="button" onClick={goBack} aria-label={modal.type === 'actions' || modal.type === 'login' ? 'Back to ticket details' : 'Back to ticket actions'}><ArrowLeft size={18} /><span>Back</span></button>}
     <button className="dashboard-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
-    <span className="dashboard-modal-icon"><Sparkles size={20} /></span>
     <h2 id="dashboard-modal-title">{title}</h2>
     {modal.type === 'details' && <>
       <div className="ticket-detail-heading"><StatusPill status={ticket.ticket_status} /><span>{ticket.issue_category}</span></div>

@@ -5,19 +5,27 @@ import {
   CalendarDays,
   ChartNoAxesColumnIncreasing,
   Check,
+  ChevronDown,
   CircleAlert,
   CircleDashed,
   ClipboardList,
   Copy,
   ChevronRight,
   DollarSign,
+  Asterisk,
+  Database,
+  Orbit,
+  Server,
+  Snowflake,
+  Sparkles,
+  Waves,
   Timer,
   History,
   BookOpenText,
   Menu,
   PartyPopper,
-  Sparkles,
   SquarePen,
+  Square,
   X,
 } from 'lucide-react';
 import { DashboardPage, UserAccountMenu, invalidateIncidentSnapshotCache } from './Dashboards.jsx';
@@ -28,6 +36,23 @@ import { ProgressiveSelect } from './ProgressiveSelect.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
+
+function ConnectorLogo({ name }) {
+  if (name === 'Databricks') return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true"><path d="m12 3 8 3.5-8 3.5-8-3.5L12 3Z" /><path d="m4 10 8 3.5 8-3.5M4 13.5 12 17l8-3.5M4 17l8 3.5 8-3.5" /></svg>;
+  if (name === 'Snowflake') return <Snowflake size={16} strokeWidth={2.2} aria-hidden="true" />;
+  if (name === 'SQL Server') return <Database size={16} strokeWidth={2.1} aria-hidden="true" />;
+  if (name === 'Oracle') return <span className="connector-oracle-wordmark" aria-hidden="true">ORACLE</span>;
+  if (name === 'Cosmos DB') return <Orbit size={16} strokeWidth={2.1} aria-hidden="true" />;
+  return <Server size={16} strokeWidth={2.1} aria-hidden="true" />;
+}
+
+function ModelLogo({ provider }) {
+  if (provider === 'DeepSeek') return <Waves size={17} strokeWidth={2.1} aria-hidden="true" />;
+  if (provider === 'OpenAI') return <Orbit size={17} strokeWidth={2.1} aria-hidden="true" />;
+  if (provider === 'Anthropic') return <Asterisk size={17} strokeWidth={2.3} aria-hidden="true" />;
+  return <Sparkles size={17} strokeWidth={2.1} aria-hidden="true" />;
+}
+
 async function readApiResponse(response) {
   try {
     return await response.json();
@@ -107,7 +132,6 @@ function ActivityStatus({ status }) {
   return (
     <div className={`activity-status activity-${status}`} role="status" aria-live="polite">
       <span key={messageIndex} className="activity-label">{messages[messageIndex]}</span>
-      <span className="activity-ellipsis" aria-hidden="true"><i /><i /><i /></span>
     </div>
   );
 }
@@ -495,10 +519,10 @@ function QueryResultView({ question, result, responseDurationMs }) {
 }
 
 function FollowupSuggestions({ questions, loading, onSelect }) {
-  if (loading) return <div className="followup-loading" role="status" aria-live="polite"><Sparkles size={14} /><span>Finding useful follow-up questions</span><span className="followup-dots" aria-hidden="true">...</span></div>;
+  if (loading) return <div className="followup-loading" role="status" aria-live="polite"><CircleDashed size={14} /><span>Finding useful follow-up questions</span><span className="followup-dots" aria-hidden="true">...</span></div>;
   if (!questions?.length) return null;
   return <section className="followup-suggestions" aria-label="Suggested follow-up questions">
-    <h3><Sparkles size={14} />Explore this result</h3>
+    <h3>Explore this result</h3>
     <div>{questions.map((question) => <button type="button" key={question} onClick={() => onSelect(question)}>{question}<ArrowUp size={14} aria-hidden="true" /></button>)}</div>
   </section>;
 }
@@ -750,8 +774,10 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
   );
 }
 
-function Composer({ value, setValue, onSend, placeholder, compact = false }) {
+function Composer({ value, setValue, onSend, onStop, isProcessing = false, placeholder, compact = false }) {
   const textareaRef = useRef(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const canSend = value.trim().length > 0;
 
   useEffect(() => {
@@ -765,7 +791,7 @@ function Composer({ value, setValue, onSend, placeholder, compact = false }) {
 
   function submit(event) {
     event.preventDefault();
-    if (canSend) onSend();
+    if (canSend && !isProcessing) onSend();
   }
 
   return (
@@ -778,15 +804,91 @@ function Composer({ value, setValue, onSend, placeholder, compact = false }) {
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
-            if (canSend) onSend();
+            if (canSend && !isProcessing) onSend();
           }
         }}
         placeholder={placeholder}
         aria-label="Message"
       />
-      <button type="submit" className={`send-button${canSend ? ' send-active' : ''}`} aria-label="Send question" disabled={!canSend}>
-        <ArrowUp size={19} strokeWidth={2.4} />
-      </button>
+      <div className="composer-source-picker">
+        <button
+          className="composer-source-trigger"
+          type="button"
+          onClick={() => {
+            setSourceMenuOpen((open) => !open);
+            setModelMenuOpen(false);
+          }}
+          aria-expanded={sourceMenuOpen}
+          aria-haspopup="listbox"
+          aria-label="Data source selection. Databricks is connected."
+        >
+          <span className="connector-logo connector-databricks"><ConnectorLogo name="Databricks" /></span>
+          <span>Databricks</span>
+          <ChevronDown className={sourceMenuOpen ? 'is-open' : ''} size={14} aria-hidden="true" />
+        </button>
+        {sourceMenuOpen && <div className="composer-source-menu" role="listbox" aria-label="Data sources">
+          {[
+            { name: 'Databricks', detail: 'Connected', status: 'active' },
+            { name: 'Snowflake', detail: 'Coming soon' },
+            { name: 'SQL Server', detail: 'Coming soon' },
+            { name: 'Oracle', detail: 'Coming soon' },
+            { name: 'Cosmos DB', detail: 'Coming soon' },
+          ].map((source) => <div
+            className={`composer-source-option${source.status === 'active' ? ' is-current' : ' is-unavailable'}`}
+            key={source.name}
+            role="option"
+            aria-selected={source.status === 'active'}
+            aria-disabled={source.status !== 'active'}
+          >
+            <span className={`connector-logo connector-${source.name.toLowerCase().replace(/\s+/g, '-')}`}><ConnectorLogo name={source.name} /></span>
+            <span className="composer-source-copy"><strong>{source.name}</strong><small>{source.detail}</small></span>
+          </div>)}
+        </div>}
+      </div>
+      <div className="composer-model-picker">
+        <button
+          className="composer-model-trigger"
+          type="button"
+          onClick={() => {
+            setModelMenuOpen((open) => !open);
+            setSourceMenuOpen(false);
+          }}
+          aria-expanded={modelMenuOpen}
+          aria-haspopup="listbox"
+          aria-label="Model selection. DeepSeek is active."
+        >
+          <span className="model-provider-logo model-deepseek"><ModelLogo provider="DeepSeek" /></span>
+          <span>DeepSeek</span>
+          <ChevronDown className={modelMenuOpen ? 'is-open' : ''} size={15} aria-hidden="true" />
+        </button>
+        {modelMenuOpen && <div className="composer-model-menu" role="listbox" aria-label="Available AI models">
+          <div className="composer-model-option is-current" role="option" aria-selected="true">
+            <span className="composer-model-option-main"><span className="model-provider-logo model-deepseek"><ModelLogo provider="DeepSeek" /></span><span><strong>DeepSeek</strong><small>Connected</small></span></span>
+            <span className="composer-model-status"><Check size={13} /> Active</span>
+          </div>
+          <div className="composer-model-option is-unavailable" aria-disabled="true">
+            <span className="composer-model-option-main"><span className="model-provider-logo model-openai"><ModelLogo provider="OpenAI" /></span><span><strong>OpenAI GPT-6.1 Sol</strong><small>OpenAI</small></span></span>
+            <span className="composer-model-status">Coming soon</span>
+          </div>
+          <div className="composer-model-option is-unavailable" aria-disabled="true">
+            <span className="composer-model-option-main"><span className="model-provider-logo model-anthropic"><ModelLogo provider="Anthropic" /></span><span><strong>Claude Sonnet 5</strong><small>Anthropic</small></span></span>
+            <span className="composer-model-status">Coming soon</span>
+          </div>
+          <div className="composer-model-option is-unavailable" aria-disabled="true">
+            <span className="composer-model-option-main"><span className="model-provider-logo model-google"><ModelLogo provider="Google" /></span><span><strong>Gemini 4 Argon</strong><small>Google</small></span></span>
+            <span className="composer-model-status">Coming soon</span>
+          </div>
+        </div>}
+      </div>
+      {isProcessing ? (
+        <button type="button" className="send-button send-stop" onClick={onStop} aria-label="Stop response" title="Stop response">
+          <Square size={13} fill="currentColor" strokeWidth={1.8} />
+        </button>
+      ) : (
+        <button type="submit" className={`send-button${canSend ? ' send-active' : ''}`} aria-label="Send question" disabled={!canSend}>
+          <ArrowUp size={19} strokeWidth={2.4} />
+        </button>
+      )}
     </form>
   );
 }
@@ -804,7 +906,24 @@ function App() {
   const [accessError, setAccessError] = useState('');
   const [checkingSession, setCheckingSession] = useState(true);
   const messagesEndRef = useRef(null);
+  const activeRequestsRef = useRef(new Map());
   const activeChat = chats.find((chat) => chat.id === activeChatId);
+  const chatIsProcessing = Boolean(activeChat?.messages.some((message) => message.role === 'assistant' && ['generating', 'running'].includes(message.status)));
+
+  function stopActiveRequest() {
+    if (!activeChat) return;
+    const pending = activeChat.messages.filter((message) => message.role === 'assistant' && ['generating', 'running'].includes(message.status));
+    pending.forEach((message) => {
+      activeRequestsRef.current.get(message.id)?.abort();
+      activeRequestsRef.current.delete(message.id);
+      updateMessage(activeChat.id, message.id, {
+        status: 'cancelled',
+        content: 'Request stopped.',
+        followupsLoading: false,
+        responseDurationMs: Date.now() - (message.startedAt || message.queryStartedAt || Date.now()),
+      });
+    });
+  }
 
   useEffect(() => {
     let active = true;
@@ -956,10 +1075,12 @@ function App() {
 
   async function sendMessage(value = draft) {
     const content = value.trim();
-    if (!content) return;
+    if (!content || chatIsProcessing) return;
     const id = activeChatId ?? crypto.randomUUID();
     const userMessage = { id: crypto.randomUUID(), role: 'user', content };
     const assistantId = crypto.randomUUID();
+    const requestController = new AbortController();
+    activeRequestsRef.current.set(assistantId, requestController);
     const assistantMessage = { id: assistantId, role: 'assistant', question: content, content: '', status: 'generating', startedAt: Date.now() };
 
     setChats((current) => {
@@ -978,6 +1099,7 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'chat', current_user: currentUser, message: content }),
+        signal: requestController.signal,
       });
       const incidentPayload = await readApiResponse(intentResponse);
       if (!intentResponse.ok && incidentPayload.kind !== 'not_incident') {
@@ -1006,6 +1128,7 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'generate', question: content }),
+        signal: requestController.signal,
       });
       const payload = await readApiResponse(response);
       if (!response.ok) {
@@ -1021,11 +1144,17 @@ function App() {
         requestId: payload.request_id,
       });
     } catch (error) {
+      if (error.name === 'AbortError') {
+        updateMessage(id, assistantId, { content: 'Request stopped.', status: 'cancelled', responseDurationMs: Date.now() - assistantMessage.startedAt });
+        return;
+      }
       updateMessage(id, assistantId, {
         content: error.message || 'Could not reach the assistant service. Start the backend and try again.',
         status: 'error',
         responseDurationMs: Date.now() - assistantMessage.startedAt,
       });
+    } finally {
+      activeRequestsRef.current.delete(assistantId);
     }
   }
 
@@ -1135,12 +1264,15 @@ function App() {
 
   async function executeQuery(chatId, message) {
     const startedAt = Date.now();
+    const requestController = new AbortController();
+    activeRequestsRef.current.set(message.id, requestController);
     updateMessage(chatId, message.id, { status: 'running', content: '', queryStartedAt: startedAt });
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'execute', sql: message.sql }),
+        signal: requestController.signal,
       });
       const payload = await readApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'Databricks query failed.');
@@ -1165,7 +1297,13 @@ function App() {
         updateMessage(chatId, message.id, { followupsLoading: false });
       }
     } catch (error) {
+      if (error.name === 'AbortError') {
+        updateMessage(chatId, message.id, { status: 'cancelled', content: 'Query request stopped.', responseDurationMs: Date.now() - startedAt });
+        return;
+      }
       updateMessage(chatId, message.id, { status: 'error', content: error.message || 'Databricks could not complete the query.', responseDurationMs: Date.now() - startedAt });
+    } finally {
+      activeRequestsRef.current.delete(message.id);
     }
   }
 
@@ -1262,7 +1400,7 @@ function App() {
               <div className="message-list">
                 {activeChat.messages.map((message) => (
                   <article className={`message-row message-${message.role}`} key={message.id}>
-                    {message.role === 'assistant' && <span className="assistant-avatar"><Sparkles size={14} /></span>}
+                    {message.role === 'assistant' && (['generating', 'running', 'incident_updating'].includes(message.status) || message.incidentBusyTicket) && <span className="assistant-thinking-mark" aria-hidden="true"><i /><i /><i /></span>}
                     <div className="message-content">
                       <div>{message.content}</div>
                       {message.status === 'generating' && <div className="activity-progress-row"><ActivityStatus status="generating" /><ElapsedTimer startedAt={message.startedAt || Date.now()} /></div>}
@@ -1302,7 +1440,7 @@ function App() {
               </div>
             </div>
             <div className="conversation-composer-area">
-              <Composer value={draft} setValue={setDraft} onSend={() => sendMessage()} placeholder="Message..." compact />
+              <Composer value={draft} setValue={setDraft} onSend={() => sendMessage()} onStop={stopActiveRequest} isProcessing={chatIsProcessing} placeholder="Message..." compact />
             </div>
           </section>
           </>
