@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
 from decimal import Decimal
-from functools import wraps
+from functools import lru_cache, wraps
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -24,6 +24,11 @@ MEMBERS = f"{CATALOG_SCHEMA}.`incident_team_members`"
 POLICIES = f"{CATALOG_SCHEMA}.`incident_ticket_policies`"
 ACTIVITY = f"{CATALOG_SCHEMA}.`incident_ticket_activity`"
 STATUSES = {"Unassigned", "Assigned", "In Progress", "Blocked", "Waiting for Info", "Completed", "Declined"}
+ISSUE_CATEGORIES = {
+    "Premium mismatch", "Missing coverage data", "Incorrect policy status", "Duplicate transaction",
+    "Missing source data", "ADF pipeline failure", "Informatica mapping issue", "Missing downstream data",
+}
+PRIORITIES = {"Low", "Medium", "High", "Urgent"}
 ASSIGNABLE = {"Pratik", "Sarvesh", "Madhu", "Saurabh"}
 KNOWN_TEAM_NAMES = ["Pratik", "Sarvesh", "Madhu", "Saurabh", "Admin"]
 TICKET_ID_RE = re.compile(r"^INC[0-9]{7}$", re.IGNORECASE)
@@ -52,6 +57,12 @@ def _json_value(value):
 def _rows(cursor) -> list[dict]:
     names = [str(col[0]) for col in cursor.description or []]
     return [dict(zip(names, (_json_value(value) for value in row))) for row in cursor.fetchall()]
+
+
+@lru_cache(maxsize=1)
+def _ticket_table_columns() -> frozenset[str]:
+    rows = _query(f"DESCRIBE TABLE {TICKETS}")
+    return frozenset(str(row.get("col_name", "")).strip().lower() for row in rows if row.get("col_name"))
 
 
 @contextmanager
@@ -156,10 +167,17 @@ def _tickets(filter_name: str = "all", current_user: dict | None = None, assigne
         raise IncidentError("Unsupported ticket filter.")
 
     where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+    ticket_columns = _ticket_table_columns()
+    optional_fields = [
+        column for column in ("requester_full_name", "priority", "severity", "created_by_name")
+        if column in ticket_columns
+    ]
+    optional_select = ", ".join(f"t.{column}" for column in optional_fields)
+    optional_select = f", {optional_select}" if optional_select else ""
     tickets = _query(
         "SELECT t.ticket_id, t.issue_summary, t.issue_description, t.issue_category, "
         "t.ticket_status, t.assigned_to_user_id, t.is_active, t.created_at, t.last_updated, "
-        "t.acknowledged_at, t.acknowledged_by_user_id "
+        f"t.acknowledged_at, t.acknowledged_by_user_id{optional_select} "
         f"FROM {TICKETS} t{where_sql} ORDER BY t.created_at DESC LIMIT 200"
     )
     if not tickets:
@@ -181,6 +199,9 @@ def _tickets(filter_name: str = "all", current_user: dict | None = None, assigne
         acknowledged_by = ticket.get("acknowledged_by_user_id")
         ticket["assigned_to"] = names.get(str(assignee_id)) if assignee_id else None
         ticket["acknowledged_by"] = names.get(str(acknowledged_by)) if acknowledged_by else None
+        # Priority is the current ticket form's severity scale. Keep it as a
+        # compatibility source until the optional severity column is populated.
+        ticket["severity"] = ticket.get("severity") or ticket.get("priority")
         ticket["related_policies"] = by_ticket.get(str(ticket["ticket_id"]), [])
     return tickets
 
@@ -230,6 +251,13 @@ def _activity_message(event: dict, actor: str, names: dict[str, str]) -> str:
         text = f"{ticket} unassigned"
     elif action == "DECLINED":
         text = f"{ticket} request declined"
+    elif action == "CREATED":
+        assignee_id = event.get("to_assignee_user_id")
+        if assignee_id:
+            assigned_to = names.get(str(assignee_id), assignee_id)
+            text = f"{ticket} created and assigned to {assigned_to}"
+        else:
+            text = f"{ticket} created and left unassigned"
     else:
         text = event.get("details") or f"{ticket} updated"
     return f"{text} by {actor}"
@@ -262,7 +290,7 @@ def classify_message(question: str, current_user: str = "Not signed in") -> dict
         intent = json.loads(answer)
     except json.JSONDecodeError:
         raise IncidentError("I couldn't interpret that ticket request. Please rephrase it.", 422) from None
-    if not isinstance(intent, dict) or intent.get("intent") not in {"list_tickets", "assign", "change_status", "decline", "clarify", "other"}:
+    if not isinstance(intent, dict) or intent.get("intent") not in {"list_tickets", "assign", "change_status", "decline", "create_ticket", "clarify", "other"}:
         raise IncidentError("I couldn't interpret that ticket request. Please rephrase it.", 422)
     return intent
 
@@ -358,6 +386,80 @@ def _apply_action(ticket_id: str, actor: dict, operation: str, *, assignee_name=
     return {"ticket": updated, "activity": list_activity(limit=6)}
 
 
+@_with_database
+def create_ticket(payload: dict, actor: dict) -> dict:
+    """Create an incident with optional ownership in the source used by chat and dashboard."""
+    columns = _ticket_table_columns()
+    required_columns = {"requester_full_name", "priority"}
+    missing_columns = sorted(required_columns - columns)
+    if missing_columns:
+        raise IncidentError(
+            "Ticket creation needs the incident table schema update. Apply backend/sql/incident_ticket_creation_migration.sql, then retry.",
+            409,
+        )
+
+    summary = str(payload.get("issue_summary", "")).strip()
+    description = str(payload.get("issue_description", "")).strip()
+    requester = str(payload.get("requester_full_name", "")).strip()
+    category = str(payload.get("issue_category", "")).strip()
+    priority = str(payload.get("priority", "")).strip().title()
+    assignee_name = str(payload.get("assigned_to", "")).strip()
+    if not 8 <= len(summary) <= 160:
+        raise IncidentError("Enter an issue summary between 8 and 160 characters.")
+    if description and not 10 <= len(description) <= 3000:
+        raise IncidentError("Enter an issue description between 10 and 3,000 characters.")
+    if not 2 <= len(requester) <= 120:
+        raise IncidentError("Enter the customer or requester's full name.")
+    if category not in ISSUE_CATEGORIES:
+        raise IncidentError("Choose an incident category from the available list.")
+    if priority not in PRIORITIES:
+        raise IncidentError("Choose Low, Medium, High, or Urgent priority.")
+    if assignee_name == "Leave unassigned":
+        assignee_name = ""
+    if assignee_name and assignee_name not in ASSIGNABLE:
+        raise IncidentError("Choose an incident team member to own this ticket.")
+    assignee = _member(assignee_name) if assignee_name else None
+
+    # Keep the existing INC + seven-digit identifier convention used by the app.
+    next_id_rows = _query(
+        f"SELECT CONCAT('INC', LPAD(CAST(COALESCE(MAX(TRY_CAST(SUBSTRING(ticket_id, 4) AS BIGINT)), 0) + 1 AS STRING), 7, '0')) AS ticket_id FROM {TICKETS}"
+    )
+    ticket_id = str(next_id_rows[0]["ticket_id"]).upper()
+    actor_id = str(actor["user_id"])
+    assignee_id = str(assignee["user_id"]) if assignee else None
+    ticket_status = "Assigned" if assignee else "Unassigned"
+    insert_columns = [
+        "ticket_id", "issue_summary", "issue_description", "issue_category", "ticket_status",
+        "assigned_to_user_id", "is_active", "created_at", "last_updated", "acknowledged_at",
+        "acknowledged_by_user_id", "requester_full_name", "priority",
+    ]
+    insert_values = [
+        _literal(ticket_id), _literal(summary), _literal(description), _literal(category), _literal(ticket_status),
+        _literal(assignee_id) if assignee_id else "NULL", "true", "current_timestamp()", "current_timestamp()",
+        "current_timestamp()" if assignee else "NULL", _literal(actor_id) if assignee else "NULL",
+        _literal(requester), _literal(priority),
+    ]
+    if "severity" in columns:
+        insert_columns.append("severity")
+        insert_values.append(_literal(priority))
+    if "created_by_name" in columns:
+        insert_columns.append("created_by_name")
+        insert_values.append(_literal(str(actor["display_name"])))
+    _execute(
+        f"INSERT INTO {TICKETS} ({', '.join(insert_columns)}) VALUES ({', '.join(insert_values)})"
+    )
+    _record_event(
+        ticket_id, actor, "CREATED", from_status=None, to_status=ticket_status,
+        from_assignee=None, to_assignee=assignee_id,
+        details=f"Created by {actor['display_name']} · {priority} priority · {category}",
+    )
+    ticket = _get_ticket(ticket_id)
+    return {"kind": "action_complete", "assignment_action": bool(assignee and assignee_id == actor_id), "ticket": ticket,
+            "activity": list_activity(limit=6),
+            "message": (f"{ticket_id} was created by {actor['display_name']} and assigned to {assignee['display_name']}."
+                        if assignee else f"{ticket_id} was created by {actor['display_name']} and left unassigned.")}
+
+
 def handle_incident_request(payload: dict) -> dict:
     """Process one LLM-classified read request or a fixed, guarded ticket action."""
     action = payload.get("action")
@@ -385,6 +487,12 @@ def handle_incident_request(payload: dict) -> dict:
                 assignee_name=payload.get("assignee"), status=payload.get("status"),
             )
         return {"kind": "action_complete", "assignment_action": operation in {"assign_to_me", "assign_to_user", "acknowledge_assign"}, **result}
+    if action == "create_ticket":
+        if not current_user:
+            raise IncidentError("Sign in to create incident tickets.", 401)
+        with _database_scope():
+            actor = _member(current_user)
+            return create_ticket(payload, actor)
     if action != "chat":
         raise IncidentError("Unknown incident API action.")
 
@@ -403,6 +511,10 @@ def handle_incident_request(payload: dict) -> dict:
             tickets = _tickets(filter_name, current_user=actor, assignee_name=intent.get("assignee"), ticket_id=intent.get("ticket_id"))
             activity = list_activity(limit=6)
         return {"kind": "ticket_list", "summary": str(intent.get("summary", "Here are the matching tickets.")), "tickets": tickets, "activity": activity}
+    if name == "create_ticket":
+        if not current_user:
+            raise IncidentError("Sign in to create incident tickets.", 401)
+        return {"kind": "ticket_creation_form", "summary": "I can help create an incident ticket. Add the issue details below; it will be assigned to you and appear on the Incident Management dashboard."}
     if not current_user:
         raise IncidentError("Sign in to manage incident tickets.", 401)
     with _database_scope():

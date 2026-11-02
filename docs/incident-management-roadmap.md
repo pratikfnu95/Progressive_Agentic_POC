@@ -2,7 +2,13 @@
 
 ## Current Databricks-backed POC workflow
 
-Incident Management reads current tickets, related policies, team members, and activity from `workspace.default.incident_tickets`, `workspace.default.incident_ticket_policies`, `workspace.default.incident_team_members`, and `workspace.default.incident_ticket_activity`. The JSON file under `src/data` is no longer the dashboard's data source. Dashboard actions and chat actions use the same backend service and update Databricks; the dashboard refreshes from those tables. Recent activity starts empty and is appended as actions occur. Ticket creation remains a placeholder.
+Incident Management reads current tickets, related policies, team members, and activity from `workspace.default.incident_tickets`, `workspace.default.incident_ticket_policies`, `workspace.default.incident_team_members`, and `workspace.default.incident_ticket_activity`. The JSON file under `src/data` is no longer the dashboard's data source. Dashboard actions and chat actions use the same backend service and update Databricks; the dashboard refreshes from those tables. Recent activity starts empty and is appended as actions occur. Ticket creation is available from the dashboard and chat, and writes to the same Databricks source of truth.
+
+### Ticket creation
+
+The create form records issue summary, category, description, reporter/customer full name, priority, and a selected teammate owner. The server validates these fields, resolves the signed-in roster identity as the creator, creates an `INC` ticket in `Assigned` status, records the selected owner and creator separately, and adds a `CREATED` event to Recent Activity (for example, “created and assigned to Sarvesh by Pratik”). New tickets appear in the dashboard snapshot and can be listed or managed from chat under the existing owner/Admin rules. Chat intent classification only decides when to show the form; required fields are collected by the UI and validated again by the backend.
+
+Before using ticket creation, apply `backend/sql/incident_ticket_creation_migration.sql` to add `requester_full_name` and `priority` to `workspace.default.incident_tickets`. To populate the Incident Management dashboard's Severity and Created By columns, also apply `backend/sql/incident_dashboard_metadata_migration.sql`. That migration gives existing rows stable, varied POC values where those fields are blank; tickets created afterward store the selected priority as severity and the signed-in creator's name. The service discovers optional columns so existing dashboard reads continue to work before the schema update; after applying migrations, restart the backend so its schema metadata cache is refreshed. The service principal needs `MODIFY` on `incident_tickets` and `incident_ticket_activity`, in addition to its existing read access. This POC creates sequential ticket IDs using the current seven-digit `INC` convention; concurrent ticket creation from multiple app instances should be moved to a dedicated ID allocator before production use.
 
 Chat asks DeepSeek to classify ticket requests into a constrained JSON intent. The server then reads actual rows or applies a supported action; it does not ask the model to invent ticket details or SQL for incident actions. Supported actions include assignment, status updates, unassignment, and decline. Status is restricted to In Progress, Blocked, Waiting for Info, or Completed. Normal users can update their own assigned tickets; Admin can update any ticket. Assigning to oneself is allowed for unassigned tickets. Every write is validated again by the backend.
 
@@ -29,7 +35,7 @@ The planned incident lifecycle is:
 5. Blocked
 6. Completed
 
-Future work includes ticket creation, richer audit history views, and stronger identity integration. Ticket actions should remain explicit and auditable.
+Future work includes richer audit history views and stronger identity integration. Ticket creation is now an explicit user-submitted form; assignment and status changes remain explicit and auditable.
 
 ## Future AI-assisted investigation
 
@@ -67,4 +73,4 @@ Only reviewed incidents with documented evidence and outcomes should be presente
 - Keep credentials server-side and use least-privilege Databricks access.
 - Enforce identity and ownership checks on the backend; do not trust an identity supplied by the browser.
 - Preserve the existing SQL review, read-only validation, and explicit execution approval flow.
-- Require human approval for ticket creation, assignment, or other actions with operational impact.
+- Require explicit user submission for ticket creation and human approval for future operational actions with broader impact.

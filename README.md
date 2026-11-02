@@ -142,7 +142,7 @@ The current version does **not**:
 - Reconcile the same policy across multiple platforms or identify the earliest point of divergence.
 - Automatically prove a root cause or guarantee that a suggested resolution will work.
 - Automatically modify policy or premium data, rerun pipelines, or repair production records.
-- Create new incident tickets; ticket creation is a placeholder in the current dashboard.
+- Create incident tickets from the dashboard or chat using a guided form. The creator chooses a teammate as the owner; Databricks records both the creator and selected assignee in ticket activity. New tickets appear in Incident Management. The one-time table migration and required service-principal permissions are documented in `docs/incident-management-roadmap.md`.
 - Use a production vector database for historical incident retrieval.
 - Provide enterprise SSO or production-grade per-user identity verification.
 - Treat the Policy Dashboard's illustrative metrics as live operational measurements.

@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertCircle, ArrowLeft, ArrowUpRight, BadgeCheck, BookOpenCheck, CalendarDays,
-  Check, ChevronDown, ChevronRight, CircleDashed, Clock3, FileWarning, Filter,
-  Hand, LogIn, LogOut, MessageSquareText, Plus, RefreshCw, Search, ShieldAlert, Sparkles,
+  Check, ChevronDown, ChevronRight, CircleDashed, FileWarning, Filter,
+  Hand, LogIn, LogOut, Plus, RefreshCw, Search, ShieldAlert, Sparkles,
+  ArrowDown, ArrowUp, ArrowUpDown,
   Ticket, UserRound, X,
 } from 'lucide-react';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
+import { IncidentTicketForm } from './IncidentTicketForm.jsx';
+import { ProgressiveSelect } from './ProgressiveSelect.jsx';
 
 const INCIDENT_CACHE_TTL_MS = 30_000;
 const incidentSnapshotCache = { snapshot: null, fetchedAt: 0, request: null };
@@ -119,12 +122,9 @@ function incidentStats(tickets) {
   const count = (status) => tickets.filter((ticket) => ticket.ticket_status === status).length;
   return [
     [Ticket, 'Total Tickets', tickets.length, null, null, 'blue'],
-    [Clock3, 'Unassigned', count('Unassigned'), null, null, 'orange'],
-    [UserRound, 'Assigned', count('Assigned'), null, null, 'teal'],
     [CircleDashed, 'In Progress', count('In Progress'), null, null, 'green'],
-    [MessageSquareText, 'Waiting for Info', count('Waiting for Info'), null, null, 'purple'],
-    [BadgeCheck, 'Completed', count('Completed'), null, null, 'green'],
     [AlertCircle, 'Blocked', count('Blocked'), null, null, 'red'],
+    [BadgeCheck, 'Completed', count('Completed'), null, null, 'completed'],
   ];
 }
 
@@ -136,11 +136,11 @@ const policyStats = [
   [Activity, 'Policy Status Issues', '11', '1', 'vs last 30 days', 'green'],
 ];
 
-function StatCards({ stats, label = 'Summary metrics', onStatusSelect, selectedStatus = null }) {
+function StatCards({ stats, label = 'Summary metrics', onStatusSelect, selectedStatus = null, statusTiles = false }) {
   return <section className={`dashboard-stats dashboard-stats-${stats.length}`} aria-label={label}>
     {stats.map(([Icon, label, value, delta, compare, tone]) => (
       <article
-        className={`dashboard-stat-card${onStatusSelect ? ' dashboard-stat-card-interactive' : ''}${onStatusSelect && (!selectedStatus ? label === 'Total Tickets' : selectedStatus === label) ? ' is-selected' : ''}`}
+        className={`dashboard-stat-card${onStatusSelect ? ' dashboard-stat-card-interactive' : ''}${statusTiles ? ` status-tile status-tile-${tone}` : ''}${onStatusSelect && (!selectedStatus ? label === 'Total Tickets' : selectedStatus === label) ? ' is-selected' : ''}`}
         key={label}
         onClick={onStatusSelect ? () => onStatusSelect(label === 'Total Tickets' ? null : label) : undefined}
         onKeyDown={onStatusSelect ? (event) => {
@@ -168,14 +168,33 @@ function StatusPill({ status }) {
   return <span className={`ticket-status status-${slug}`}>{status}</span>;
 }
 
+function SeverityPill({ severity }) {
+  if (!severity) return <span className="ticket-severity severity-unspecified">—</span>;
+  const slug = String(severity).toLowerCase().replaceAll(' ', '-');
+  return <span className={`ticket-severity severity-${slug}`}>{severity}</span>;
+}
+
 function TicketLink({ ticket, onOpen }) {
   return <button className="ticket-detail-link" aria-label={`View details for ${ticket.ticket_id}`} onClick={() => onOpen(ticket)}>{ticket.ticket_id}</button>;
 }
 
+const ALL_TICKET_STATUSES = 'All statuses';
+const ALL_TICKET_SEVERITIES = 'All severities';
+const INCIDENT_SORT_FIELDS = [
+  ['Ticket #', 'ticket_id'],
+  ['Issue Summary', 'issue_summary'],
+  ['Ticket Status', 'ticket_status'],
+  ['Severity', 'severity'],
+  ['Created By', 'created_by_name'],
+  ['Assigned To', 'assigned_to'],
+  ['Created On', 'created_at'],
+  ['Last Update', 'last_updated'],
+];
+
 function TicketsTable({ policy = false, tickets = [], onOpenDetails, pendingTicketId = '', activeStatus = null, totalTicketCount = 0, onClearStatusFilter }) {
   const headers = policy
     ? ['Policy #', 'Issue Summary', 'Category', 'Severity', 'Detected On', 'Last Update']
-    : ['Ticket #', 'Issue Summary', 'Ticket Status', 'Assigned To', 'Created On', 'Last Update'];
+    : ['Ticket #', 'Issue Summary', 'Ticket Status', 'Severity', 'Created By', 'Assigned To', 'Created On', 'Last Update'];
   const rows = policy
     ? [
       ['WC-1001', 'Premium differs from source by $1,000', 'Premium mismatch', 'High', 'Oct 29, 2026', 'Oct 29, 2026'],
@@ -186,24 +205,76 @@ function TicketsTable({ policy = false, tickets = [], onOpenDetails, pendingTick
     ]
     : tickets;
   const [notice, setNotice] = useState('');
+  const [ticketSearch, setTicketSearch] = useState('');
+  const [ticketStatusFilter, setTicketStatusFilter] = useState(ALL_TICKET_STATUSES);
+  const [ticketSeverityFilter, setTicketSeverityFilter] = useState(ALL_TICKET_SEVERITIES);
+  const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
+  const statusOptions = [ALL_TICKET_STATUSES, ...new Set([...ticketStatusVisuals.map(([status]) => status), ...tickets.map((ticket) => ticket.ticket_status).filter(Boolean)])];
+  const severityOptions = [ALL_TICKET_SEVERITIES, ...new Set(['Low', 'Medium', 'High', 'Urgent', ...tickets.map((ticket) => ticket.severity || ticket.priority).filter(Boolean)])];
+  const hasLocalFilters = Boolean(ticketSearch.trim()) || ticketStatusFilter !== ALL_TICKET_STATUSES || ticketSeverityFilter !== ALL_TICKET_SEVERITIES;
+  const visibleTickets = policy ? [] : tickets.filter((ticket) => {
+    const severity = ticket.severity || ticket.priority || '';
+    const query = ticketSearch.trim().toLocaleLowerCase();
+    const matchesSearch = !query || [ticket.ticket_id, ticket.issue_summary, ticket.ticket_status, severity, ticket.created_by_name, ticket.assigned_to]
+      .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+    return matchesSearch
+      && (ticketStatusFilter === ALL_TICKET_STATUSES || ticket.ticket_status === ticketStatusFilter)
+      && (ticketSeverityFilter === ALL_TICKET_SEVERITIES || severity === ticketSeverityFilter);
+  }).sort((left, right) => {
+    const leftValue = (sortConfig.key === 'severity' ? left.severity || left.priority : left[sortConfig.key]) || '';
+    const rightValue = (sortConfig.key === 'severity' ? right.severity || right.priority : right[sortConfig.key]) || '';
+    const isDateField = sortConfig.key === 'created_at' || sortConfig.key === 'last_updated';
+    const leftDate = isDateField ? Date.parse(leftValue) : Number.NaN;
+    const rightDate = isDateField ? Date.parse(rightValue) : Number.NaN;
+    const comparison = isDateField && !Number.isNaN(leftDate) && !Number.isNaN(rightDate)
+      ? leftDate - rightDate
+      : String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: 'base' });
+    return sortConfig.direction === 'asc' ? comparison : -comparison;
+  });
+  const clearLocalFilters = () => {
+    setTicketSearch('');
+    setTicketStatusFilter(ALL_TICKET_STATUSES);
+    setTicketSeverityFilter(ALL_TICKET_SEVERITIES);
+  };
+  const changeSort = (key) => setSortConfig((current) => ({
+    key,
+    direction: current.key === key && current.direction === 'asc' ? 'desc' : current.key === key ? 'asc' : (key === 'created_at' || key === 'last_updated' ? 'desc' : 'asc'),
+  }));
   return <section className="dashboard-panel dashboard-table-panel">
     <div className="dashboard-panel-heading">
       <div className="dashboard-table-title-group"><h2>{policy ? 'Recent Policy Issues' : 'Recent Tickets'}</h2>{activeStatus && <div className="dashboard-active-filter"><span>Filtered by</span><StatusPill status={activeStatus} /><button type="button" onClick={onClearStatusFilter}>Clear filter</button></div>}</div>
       <div className="dashboard-table-heading-actions">{activeStatus && <span className="dashboard-filter-count">{tickets.length} of {totalTicketCount}</span>}<button className="dashboard-text-button" onClick={() => setNotice(policy ? 'The full policy issue list is a demo view for this phase.' : 'The full ticket list is a demo view for this phase.')}>View All<ChevronRight size={15} /></button></div>
     </div>
-    <div className="dashboard-table-scroll"><table className="dashboard-table"><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+    {!policy && <div className="dashboard-table-toolbar" aria-label="Filter and sort incident tickets">
+      <label className="dashboard-table-search"><Search size={15} aria-hidden="true" /><input type="search" value={ticketSearch} onChange={(event) => setTicketSearch(event.target.value)} placeholder="Find a ticket or owner" aria-label="Search incident tickets" /></label>
+      <div className="dashboard-table-filter-pickers">
+        <ProgressiveSelect label="Status" value={ticketStatusFilter} options={statusOptions} onChange={setTicketStatusFilter} className="dashboard-filter-picker" />
+        <ProgressiveSelect label="Severity" value={ticketSeverityFilter} options={severityOptions} onChange={setTicketSeverityFilter} className="dashboard-filter-picker" />
+      </div>
+      <div className="dashboard-mobile-sort">
+        <ProgressiveSelect label="Sort by" value={INCIDENT_SORT_FIELDS.find(([, key]) => key === sortConfig.key)?.[0] || 'Created On'} options={INCIDENT_SORT_FIELDS.map(([label]) => label)} onChange={(label) => changeSort(INCIDENT_SORT_FIELDS.find(([field]) => field === label)?.[1] || 'created_at')} className="dashboard-filter-picker" />
+        <button type="button" className="dashboard-sort-direction" onClick={() => setSortConfig((current) => ({ ...current, direction: current.direction === 'asc' ? 'desc' : 'asc' }))} aria-label={`Sort ${sortConfig.direction === 'asc' ? 'descending' : 'ascending'}`} title={`Sort ${sortConfig.direction === 'asc' ? 'descending' : 'ascending'}`}>
+          {sortConfig.direction === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+        </button>
+      </div>
+      <span className="dashboard-table-match-count">{visibleTickets.length} {visibleTickets.length === 1 ? 'ticket' : 'tickets'}</span>
+      {hasLocalFilters && <button type="button" className="dashboard-clear-filters" onClick={clearLocalFilters}>Clear</button>}
+    </div>}
+    <div className="dashboard-table-scroll"><table className={`dashboard-table${policy ? '' : ' dashboard-incident-table'}`}><thead><tr>{policy ? headers.map((header) => <th key={header}>{header}</th>) : INCIDENT_SORT_FIELDS.map(([header, key]) => <th key={header} aria-sort={sortConfig.key === key ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none'}><button type="button" className={`dashboard-sort-button${sortConfig.key === key ? ' is-active' : ''}`} onClick={() => changeSort(key)}>{header}{sortConfig.key === key ? (sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ArrowUpDown size={12} />}</button></th>)}</tr></thead>
       <tbody>
         {policy
           ? rows.map((row) => <tr key={row[0]}>{row.map((cell, cellIndex) => <td key={cellIndex} data-label={headers[cellIndex]}>{cellIndex === 3 ? <StatusPill status={cell} /> : cell}</td>)}</tr>)
-          : rows.map((ticket) => <tr key={ticket.ticket_id} className={pendingTicketId === ticket.ticket_id ? 'dashboard-ticket-pending' : ''}>
+          : visibleTickets.map((ticket) => <tr key={ticket.ticket_id} className={pendingTicketId === ticket.ticket_id ? 'dashboard-ticket-pending' : ''}>
             <td data-label="Ticket #" className="ticket-id-cell"><TicketLink ticket={ticket} onOpen={onOpenDetails} /></td>
             <td data-label="Issue Summary" className="ticket-summary-cell" title={ticket.issue_summary}><button className="ticket-detail-link ticket-summary-link" onClick={() => onOpenDetails(ticket)}>{ticket.issue_summary}</button></td>
             <td data-label="Ticket Status">{pendingTicketId === ticket.ticket_id ? <span className="ticket-status-saving"><CircleDashed size={13} />Updating…</span> : <StatusPill status={ticket.ticket_status} />}</td>
+            <td data-label="Severity"><SeverityPill severity={ticket.severity || ticket.priority} /></td>
+            <td data-label="Created By">{ticket.created_by_name || '—'}</td>
             <td data-label="Assigned To">{ticket.assigned_to || '—'}</td>
             <td data-label="Created On">{formatIncidentDate(ticket.created_at)}</td>
             <td data-label="Last Update">{formatIncidentDate(ticket.last_updated)}</td>
           </tr>)}
-        {!policy && rows.length === 0 && <tr><td className="ticket-empty-cell" colSpan={6}>{activeStatus ? `No ${activeStatus.toLowerCase()} tickets are currently in the list.` : 'No active tickets. All sample requests have been declined.'}</td></tr>}
+        {!policy && visibleTickets.length === 0 && <tr><td className="ticket-empty-cell" colSpan={8}>{hasLocalFilters || activeStatus ? 'No tickets match these filters.' : 'No active tickets. All sample requests have been declined.'}</td></tr>}
       </tbody>
     </table></div>
     {notice && <div className="dashboard-inline-notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="Dismiss"><X size={14} /></button></div>}
@@ -215,7 +286,7 @@ const ticketStatusVisuals = [
   ['Assigned', 'teal'],
   ['In Progress', 'green'],
   ['Waiting for Info', 'purple'],
-  ['Completed', 'green'],
+  ['Completed', 'completed'],
   ['Blocked', 'red'],
 ];
 
@@ -227,7 +298,7 @@ function TicketBreakdown({ tickets }) {
     count: tickets.filter((ticket) => ticket.ticket_status === status).length,
   }));
   let accumulated = 0;
-  const colors = { orange: '#f69a32', teal: '#51b5c5', blue: '#2687d9', purple: '#9270c7', green: '#4fc58e', red: '#ef646a' };
+  const colors = { orange: '#f69a32', teal: '#51b5c5', blue: '#2687d9', purple: '#9270c7', green: '#4fc58e', completed: '#269b6a', red: '#ef646a' };
   const gradient = total
     ? `conic-gradient(${counts.map(({ tone, count }) => {
       const start = accumulated;
@@ -281,7 +352,7 @@ function AssistantPanel({ onAction }) {
   </aside>;
 }
 
-function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecline, onUpdateStatus, onLogin, currentUser }) {
+function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecline, onUpdateStatus, onCreateTicket, onLogin, currentUser }) {
   const [assignee, setAssignee] = useState('');
   const [assigneeMenuOpen, setAssigneeMenuOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -304,6 +375,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
       : modal.type === 'assign' ? (modal.acknowledge ? 'Acknowledge ticket' : 'Assign ticket')
         : modal.type === 'status' ? 'Update ticket status'
         : modal.type === 'decline' ? 'Decline this request?'
+          : modal.type === 'create_ticket' ? 'Create incident ticket'
           : modal.type === 'login' ? 'Sign in to manage this ticket'
           : 'Demo preview';
 
@@ -354,7 +426,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
     }
   }
 
-  return <div className="dashboard-modal-backdrop" role="presentation" onClick={onClose}><section className={`dashboard-modal${modal.type === 'details' ? ' dashboard-ticket-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title" onClick={(event) => event.stopPropagation()}>
+  return <div className="dashboard-modal-backdrop" role="presentation" onClick={onClose}><section className={`dashboard-modal${['details', 'create_ticket'].includes(modal.type) ? ' dashboard-ticket-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title" onClick={(event) => event.stopPropagation()}>
     {hasPreviousModal && <button className="dashboard-modal-back" type="button" onClick={goBack} aria-label={modal.type === 'actions' || modal.type === 'login' ? 'Back to ticket details' : 'Back to ticket actions'}><ArrowLeft size={18} /><span>Back</span></button>}
     <button className="dashboard-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
     <span className="dashboard-modal-icon"><Sparkles size={20} /></span>
@@ -368,7 +440,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
       {detailTab === 'details' ? <div className="ticket-detail-tab-panel" role="tabpanel" aria-label="Ticket details">
         <div className="ticket-detail-description"><span>Issue summary</span><p>{ticket.issue_summary}</p><span>Details</span><p>{ticket.issue_description || ticket.issue_summary}</p></div>
         <div className="ticket-detail-section"><h3>Related policies <span>{relatedPolicies.length}</span></h3>{relatedPolicies.length ? <div className="ticket-policy-list">{relatedPolicies.map((policy) => <div className="ticket-policy-item" key={policy.policy_number}><strong>{policy.policy_number}</strong><StatusPill status={policy.policy_status || 'Unknown'} /></div>)}</div> : <p className="ticket-detail-muted">No policy is linked to this incident.</p>}</div>
-        <div className="ticket-detail-grid"><div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatIncidentTimestamp(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatIncidentTimestamp(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatIncidentTimestamp(ticket.acknowledged_at)}</strong></div>}</div>
+        <div className="ticket-detail-grid">{ticket.requester_full_name && <div><span>Reported by</span><strong>{ticket.requester_full_name}</strong></div>}{ticket.severity && <div><span>Severity</span><strong>{ticket.severity}</strong></div>}{ticket.priority && <div><span>Priority</span><strong>{ticket.priority}</strong></div>}{ticket.created_by_name && <div><span>Created by</span><strong>{ticket.created_by_name}</strong></div>}<div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatIncidentTimestamp(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatIncidentTimestamp(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatIncidentTimestamp(ticket.acknowledged_at)}</strong></div>}</div>
       </div> : <div className="ticket-detail-tab-panel ticket-investigation-panel" role="tabpanel" aria-label="Investigation steps">
         {investigation.status === 'loading' && <div className="ticket-investigation-loading" role="status"><CircleDashed size={18} /><span><strong>Finding a relevant reference…</strong><small>Checking the resolved incident examples for this ticket.</small></span></div>}
         {investigation.status === 'error' && <div className="ticket-investigation-error" role="alert"><AlertCircle size={16} /><span>{investigation.error}</span><button type="button" onClick={showInvestigation}>Try again</button></div>}
@@ -376,6 +448,11 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
       </div>}
       <div className="ticket-detail-footer"><button className="dashboard-modal-secondary" onClick={onClose}>Close</button>{!currentUser ? <button className="dashboard-modal-done" onClick={() => onModal({ type: 'login', ticket })}><LogIn size={15} />Log in to take action</button> : canTakeTicketAction ? <button className="dashboard-modal-done" onClick={() => onModal({ type: 'actions', ticket })}><Activity size={15} />Take action</button> : null}</div>
     </>}
+    {modal.type === 'create_ticket' && <IncidentTicketForm currentUser={currentUser} submitLabel="Create ticket" onSubmit={async (values) => {
+      const created = await onCreateTicket(values);
+      if (created) onClose();
+      return created;
+    }} />}
     {modal.type === 'actions' && <>
       <p className="dashboard-modal-intro">Choose what to do with <strong>{ticket.ticket_id}</strong>.</p>
       <div className="ticket-action-choices">
@@ -404,11 +481,11 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
   </section></div>;
 }
 
-function IncidentDashboard({ tickets, activity, onModal, onOpenDetails, pendingTicketId, onRefresh, refreshing, lastUpdated }) {
+function IncidentDashboard({ tickets, activity, onModal, onOpenDetails, onCreate, pendingTicketId, onRefresh, refreshing, lastUpdated }) {
   const [selectedStatus, setSelectedStatus] = useState(null);
   const visibleTickets = selectedStatus ? tickets.filter((ticket) => ticket.ticket_status === selectedStatus) : tickets;
-  return <><DashboardHeader title="Incident Management" subtitle="Track, investigate and resolve data and policy issues." onRefresh={onRefresh} refreshing={refreshing} lastUpdated={lastUpdated} onCreate={() => onModal('Ticket creation is coming soon. This preview does not create or save tickets.')} />
-    <StatCards stats={incidentStats(tickets)} label="Ticket metrics from test data" onStatusSelect={setSelectedStatus} selectedStatus={selectedStatus} /><div className="dashboard-primary-grid incident-primary-grid"><TicketsTable tickets={visibleTickets} onOpenDetails={onOpenDetails} pendingTicketId={pendingTicketId} activeStatus={selectedStatus} totalTicketCount={tickets.length} onClearStatusFilter={() => setSelectedStatus(null)} /></div><div className="dashboard-lower-grid"><TicketBreakdown tickets={tickets} /><ActivityPanel events={activity} /></div></>;
+  return <><DashboardHeader title="Incident Management" subtitle="Track, investigate and resolve data and policy issues." onRefresh={onRefresh} refreshing={refreshing} lastUpdated={lastUpdated} onCreate={onCreate} />
+    <StatCards stats={incidentStats(tickets)} label="Ticket metrics from test data" onStatusSelect={setSelectedStatus} selectedStatus={selectedStatus} statusTiles /><div className="dashboard-primary-grid incident-primary-grid"><TicketsTable tickets={visibleTickets} onOpenDetails={onOpenDetails} pendingTicketId={pendingTicketId} activeStatus={selectedStatus} totalTicketCount={tickets.length} onClearStatusFilter={() => setSelectedStatus(null)} /></div><div className="dashboard-lower-grid"><TicketBreakdown tickets={tickets} /><ActivityPanel events={activity} /></div></>;
 }
 
 function IncidentMutationToast({ notice, onClose }) {
@@ -602,11 +679,42 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
   function declineTicket(ticket) { return mutateTicket(ticket, 'decline'); }
   function updateTicketStatus(ticket, status) { return mutateTicket(ticket, 'set_status', { status }); }
 
+  async function createIncidentTicket(values) {
+    if (pendingTicketId) throw new Error('Another ticket update is still in progress. Please wait and try again.');
+    setPendingTicketId('new-ticket');
+    setMutationNotice({ type: 'loading', title: 'Creating incident ticket…', detail: 'Saving the ticket and recording its assignment in Databricks.' });
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create_ticket', current_user: currentUser, ...values }),
+      });
+      const payload = await readIncidentResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'The ticket could not be created.');
+      const current = incidentSnapshotCache.snapshot || incidentState;
+      const next = {
+        tickets: [payload.ticket, ...current.tickets.filter((ticket) => ticket.ticket_id !== payload.ticket.ticket_id)].slice(0, 200),
+        activity: payload.activity || current.activity,
+      };
+      incidentSnapshotCache.snapshot = next;
+      incidentSnapshotCache.fetchedAt = Date.now();
+      setIncidentLastUpdated(incidentSnapshotCache.fetchedAt);
+      setIncidentState(next);
+      setMutationNotice({ type: 'success', title: payload.ticket.assigned_to ? `${payload.ticket.ticket_id} created and assigned to ${payload.ticket.assigned_to}.` : `${payload.ticket.ticket_id} created and left unassigned.`, detail: 'The new ticket is now visible on this dashboard and in chat.' });
+      return true;
+    } catch (error) {
+      setMutationNotice({ type: 'error', title: 'Ticket creation failed', detail: error.message || 'The ticket could not be created. Please try again.' });
+      throw error;
+    } finally {
+      setPendingTicketId('');
+    }
+  }
+
   return <section className="dashboard-page">
     <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} /></div>
-    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
+    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onCreate={() => setModal({ type: 'create_ticket' })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
       <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Databricks</p>
-    </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onLogin={onLogin} currentUser={currentUser} />
+    </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onCreateTicket={createIncidentTicket} onLogin={onLogin} currentUser={currentUser} />
     {isIncident && <IncidentMutationToast notice={mutationNotice} onClose={() => { mutationNoticeId.current = null; setMutationNotice(null); }} />}
   </section>;
 }

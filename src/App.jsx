@@ -5,7 +5,6 @@ import {
   CalendarDays,
   ChartNoAxesColumnIncreasing,
   Check,
-  ChevronDown,
   CircleAlert,
   CircleDashed,
   ClipboardList,
@@ -24,6 +23,8 @@ import {
 import { DashboardPage, UserAccountMenu, invalidateIncidentSnapshotCache } from './Dashboards.jsx';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 import { HowItWorksPage } from './HowItWorksPage.jsx';
+import { IncidentTicketForm } from './IncidentTicketForm.jsx';
+import { ProgressiveSelect } from './ProgressiveSelect.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
@@ -556,29 +557,6 @@ function formatResultCell(value, columnName, row, currencyColumnIndex) {
 const incidentChatStatuses = ['In Progress', 'Blocked', 'Waiting for Info', 'Completed'];
 const incidentChatAssignees = ['Pratik', 'Sarvesh', 'Madhu', 'Saurabh'];
 
-function ProgressiveSelect({ label, value, options, placeholder, onChange }) {
-  const [open, setOpen] = useState(false);
-  const pickerRef = useRef(null);
-  useEffect(() => {
-    function dismiss(event) {
-      if (!pickerRef.current?.contains(event.target) || event.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('pointerdown', dismiss);
-    document.addEventListener('keydown', dismiss);
-    return () => {
-      document.removeEventListener('pointerdown', dismiss);
-      document.removeEventListener('keydown', dismiss);
-    };
-  }, []);
-
-  return <label className="incident-chat-picker-label"><span>{label}</span><div className="incident-chat-picker" ref={pickerRef}>
-    <button type="button" className={`incident-chat-picker-trigger${open ? ' is-open' : ''}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
-      <span className={value ? '' : 'is-placeholder'}>{value || placeholder}</span><ChevronDown size={15} />
-    </button>
-    {open && <div className="incident-chat-picker-menu" role="listbox" aria-label={label}>{options.map((option) => <button type="button" role="option" aria-selected={value === option} className={value === option ? 'is-selected' : ''} key={option} onClick={() => { onChange(option); setOpen(false); }}><span>{option === 'Waiting for Info' ? 'Request more access' : option}</span>{value === option && <Check size={15} />}</button>)}</div>}
-  </div></label>;
-}
-
 function IncidentActionFeedback({ feedback }) {
   if (!feedback) return null;
   const Icon = feedback.icon === 'blocked' ? CircleAlert
@@ -625,19 +603,20 @@ function ChatTicketDetailsModal({ ticket, onClose }) {
       <div className="ticket-detail-section"><h3>Related policies <span>{policies.length}</span></h3>
         {policies.length ? <div className="ticket-policy-list">{policies.map((policy) => <div className="ticket-policy-item" key={`${ticket.ticket_id}-${policy.policy_number}`}><strong>{policy.policy_number}</strong><span className={`ticket-status status-${String(policy.policy_status || 'Unknown').toLowerCase().replaceAll(' ', '-')}`}>{policy.policy_status || 'Unknown'}</span></div>)}</div> : <p className="ticket-detail-muted">No policy is linked to this incident.</p>}
       </div>
-      <div className="ticket-detail-grid"><div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatTicketDetailDate(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatTicketDetailDate(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatTicketDetailDate(ticket.acknowledged_at)}</strong></div>}</div>
+      <div className="ticket-detail-grid">{ticket.requester_full_name && <div><span>Reported by</span><strong>{ticket.requester_full_name}</strong></div>}{ticket.priority && <div><span>Priority</span><strong>{ticket.priority}</strong></div>}<div><span>Assigned to</span><strong>{ticket.assigned_to || 'Unassigned'}</strong></div><div><span>Created on</span><strong>{formatTicketDetailDate(ticket.created_at)}</strong></div><div><span>Last updated</span><strong>{formatTicketDetailDate(ticket.last_updated)}</strong></div>{ticket.acknowledged_at && <div><span>Acknowledged on</span><strong>{formatTicketDetailDate(ticket.acknowledged_at)}</strong></div>}</div>
       <div className="ticket-detail-footer"><button className="dashboard-modal-secondary" type="button" onClick={onClose}>Close</button></div>
     </section>
   </div>;
 }
 
-function IncidentConversationResult({ result, currentUser, onAction }) {
+function IncidentConversationResult({ result, currentUser, onAction, onCreate }) {
   const [editors, setEditors] = useState({});
   const [fieldSelections, setFieldSelections] = useState({});
   const [selectedTicket, setSelectedTicket] = useState(null);
   if (!result) return null;
   if (result.kind === 'clarification') return null;
   if (result.kind === 'action_complete') return <><IncidentActionFeedback feedback={{ tone: 'green', icon: 'completed', title: result.message || 'Ticket updated successfully.', detail: result.ticket && `${result.ticket.ticket_id} · ${result.ticket.ticket_status} · ${result.ticket.assigned_to || 'Unassigned'}` }} />{result.resolution_guidance_pending && <div className="incident-chat-guide-loading"><CircleDashed size={14} /> Preparing an investigation reference…</div>}<IncidentResolutionGuide guide={result.resolution_guidance} error={result.resolution_guidance_error} /></>;
+  if (result.kind === 'ticket_creation_form') return <section className="incident-chat-result incident-chat-create-result"><IncidentTicketForm currentUser={currentUser} submitLabel="Create ticket" onSubmit={onCreate} /></section>;
 
   function ticketCard(ticket) {
     const canManage = currentUser === 'Admin' || ticket.assigned_to === currentUser;
@@ -1050,6 +1029,47 @@ function App() {
     }
   }
 
+  async function createIncidentFromChat(chatId, formMessage, values) {
+    const startedAt = Date.now();
+    const actionId = crypto.randomUUID();
+    const issueTitle = values.issue_summary;
+    setChats((current) => current.map((chat) => chat.id !== chatId ? chat : {
+      ...chat,
+      messages: [...chat.messages,
+        { id: crypto.randomUUID(), role: 'user', content: `Create incident ticket: ${issueTitle}` },
+        { id: actionId, role: 'assistant', content: `Creating the ticket and assigning it to ${values.assigned_to}…`, status: 'incident_updating', startedAt },
+      ],
+    }));
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create_ticket', current_user: currentUser, ...values }),
+      });
+      const payload = await readApiResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'The incident ticket could not be created.');
+      invalidateIncidentSnapshotCache();
+      updateMessage(chatId, formMessage.id, { content: 'Ticket details submitted.', incidentResult: null });
+      updateMessage(chatId, actionId, {
+        content: '', status: 'completed', responseDurationMs: Date.now() - startedAt,
+        incidentResult: {
+          kind: 'action_complete', message: payload.message, ticket: payload.ticket,
+          resolution_guidance_pending: payload.resolution_guidance_pending,
+        },
+      });
+      if (payload.resolution_guidance_pending && payload.ticket?.ticket_id) {
+        void loadChatIncidentGuidance(chatId, actionId, payload.ticket.ticket_id);
+      }
+      return true;
+    } catch (error) {
+      updateMessage(chatId, actionId, {
+        content: 'Ticket creation could not be completed. See the form for details.',
+        status: 'error', responseDurationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
+  }
+
   async function mutateIncidentFromChat(chatId, message, ticket, operation, extra = {}) {
     const startedAt = Date.now();
     const actionId = crypto.randomUUID();
@@ -1080,7 +1100,7 @@ function App() {
       if (!response.ok) throw new Error(payload.error || 'The ticket could not be updated.');
       if (payload.kind === 'action_complete') invalidateIncidentSnapshotCache();
       const status = payload.ticket?.ticket_status || (operation === 'decline' ? 'Declined' : 'Updated');
-      const tone = status === 'Blocked' || status === 'Declined' ? 'red' : status === 'Completed' ? 'green' : status === 'Waiting for Info' ? 'purple' : 'blue';
+      const tone = status === 'Blocked' || status === 'Declined' ? 'red' : status === 'Completed' ? 'completed' : status === 'Waiting for Info' ? 'purple' : 'blue';
       const icon = status === 'Blocked' || status === 'Declined' ? 'blocked' : status === 'Completed' ? 'completed' : 'party';
       const outcome = operation === 'set_status' ? `${ticketId} updated successfully — ${status === 'Waiting for Info' ? 'Request more access' : status}.`
         : operation === 'decline' ? `${ticketId} was declined.`
@@ -1249,7 +1269,7 @@ function App() {
                       {message.status === 'incident_updating' && <IncidentUpdatingStatus startedAt={message.startedAt || Date.now()} />}
                       {message.incidentResult && <ResponseTime durationMs={message.responseDurationMs} />}
                       {message.incidentFeedback && <><ResponseTime durationMs={message.responseDurationMs} /><IncidentActionFeedback feedback={message.incidentFeedback} />{message.incidentFeedback.resolutionGuideLoading && <div className="incident-chat-guide-loading"><CircleDashed size={14} /> Preparing an investigation reference…</div>}<IncidentResolutionGuide guide={message.incidentFeedback.resolutionGuide} error={message.incidentFeedback.resolutionGuideError} /></>}
-                      {message.incidentResult && <IncidentConversationResult result={message.incidentResult} currentUser={currentUser} onAction={(ticket, operation, extra) => mutateIncidentFromChat(activeChat.id, message, ticket, operation, extra)} />}
+                      {message.incidentResult && <IncidentConversationResult result={message.incidentResult} currentUser={currentUser} onCreate={(values) => createIncidentFromChat(activeChat.id, message, values)} onAction={(ticket, operation, extra) => mutateIncidentFromChat(activeChat.id, message, ticket, operation, extra)} />}
                       {message.incidentBusyTicket && <ActivityStatus status="running" />}
                       {message.sql && (
                         <section className="sql-review" aria-label="Generated SQL review">
