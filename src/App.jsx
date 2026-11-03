@@ -8,10 +8,13 @@ import {
   ChevronDown,
   CircleAlert,
   CircleDashed,
+  Activity,
   ClipboardList,
+  ClipboardPlus,
   Copy,
   ChevronRight,
   DollarSign,
+  FileCode2,
   Asterisk,
   Database,
   Orbit,
@@ -88,6 +91,35 @@ const welcomeStarters = [
   { category: 'Policy data', prompt: 'Show coverage codes and written premium by policy', Icon: ChartNoAxesColumnIncreasing },
   { category: 'Incident tickets', prompt: 'List all unassigned incident tickets', Icon: ClipboardList },
   { category: 'Incident tickets', prompt: 'Show incident tickets assigned to me', Icon: CircleAlert },
+  { category: 'Azure', prompt: 'Explore incoming XML files in Azure Data Lake', Icon: FileCode2, comingSoon: true },
+  { category: 'Azure', prompt: 'Review Azure Data Factory Run', Icon: Activity, comingSoon: true },
+  { category: 'Jira board', prompt: 'Create a Jira ticket', Icon: ClipboardPlus, comingSoon: true },
+  { category: 'Jira board', prompt: 'Explore and track the Jira board', Icon: ChartNoAxesColumnIncreasing, comingSoon: true },
+  { category: 'GitHub', prompt: 'Review open pull requests and summarize requested changes', Icon: BookOpenText, comingSoon: true },
+  { category: 'GitHub', prompt: 'Check recent deployments and failed workflow runs', Icon: Activity, comingSoon: true },
+  { category: 'Confluence', prompt: 'Find knowledge base pages related to an incident', Icon: BookOpenText, comingSoon: true },
+  { category: 'Confluence', prompt: 'Review documentation for the latest resolution steps', Icon: FileCode2, comingSoon: true },
+  { category: 'Snowflake', prompt: 'Explore available databases, schemas, and tables', Icon: Database, comingSoon: true },
+  { category: 'Snowflake', prompt: 'Summarize data trends and flag unusual values', Icon: ChartNoAxesColumnIncreasing, comingSoon: true },
+  { category: 'SQL Server', prompt: 'Compare row counts across related tables', Icon: ChartNoAxesColumnIncreasing, comingSoon: true },
+  { category: 'SQL Server', prompt: 'Find missing or inconsistent records', Icon: CircleAlert, comingSoon: true },
+  { category: 'Oracle', prompt: 'Summarize transaction activity by period', Icon: ChartNoAxesColumnIncreasing, comingSoon: true },
+  { category: 'Oracle', prompt: 'Check tables for duplicate or incomplete records', Icon: CircleAlert, comingSoon: true },
+  { category: 'Cosmos DB', prompt: 'Explore containers and summarize document fields', Icon: Orbit, comingSoon: true },
+  { category: 'Cosmos DB', prompt: 'Find documents with missing fields or unusual values', Icon: CircleAlert, comingSoon: true },
+];
+
+const welcomeCategories = [
+  { name: 'Policy data', logo: 'majesco' },
+  { name: 'Incident tickets', logo: 'servicenow' },
+  { name: 'Azure', logo: 'azure' },
+  { name: 'Jira board', logo: 'jira' },
+  { name: 'GitHub', logo: 'github' },
+  { name: 'Confluence', logo: 'confluence' },
+  { name: 'Snowflake', logo: 'snowflake' },
+  { name: 'SQL Server', logo: 'sql-server' },
+  { name: 'Oracle', logo: 'oracle' },
+  { name: 'Cosmos DB', logo: 'cosmos-db' },
 ];
 
 const welcomePlaceholders = [
@@ -104,18 +136,71 @@ const welcomePlaceholders = [
 ];
 
 function WelcomePromptChips({ onSelect }) {
+  const [expandedIntegration, setExpandedIntegration] = useState(null);
+  const primaryCategories = welcomeCategories.filter(({ name }) => name === 'Policy data' || name === 'Incident tickets');
+  const upcomingCategories = welcomeCategories.filter(({ name }) => !primaryCategories.some((primary) => primary.name === name));
+
   return <section className="welcome-starters" aria-label="Suggested questions">
     <div className="welcome-starter-grid">
-      {['Policy data', 'Incident tickets'].map((category) => <div className="welcome-starter-group" key={category}>
-        <h4>{category}</h4>
-        {welcomeStarters.filter((starter) => starter.category === category).map(({ prompt, Icon }) => <button type="button" className="welcome-starter" key={prompt} onClick={() => onSelect(prompt)}>
+      {primaryCategories.map(({ name, logo }) => <div className={`welcome-starter-group group-${logo}`} key={name}>
+        <div className="welcome-starter-heading">
+          <WelcomeCategoryLogo type={logo} />
+          <h4>{name}</h4>
+        </div>
+        {welcomeStarters.filter((starter) => starter.category === name).map(({ prompt, Icon }) => <button type="button" className="welcome-starter" key={prompt} onClick={() => onSelect(prompt)} aria-label={prompt}>
           <Icon size={16} aria-hidden="true" />
           <span><strong>{prompt}</strong></span>
           <ChevronRight size={18} strokeWidth={2.5} aria-hidden="true" />
         </button>)}
       </div>)}
     </div>
+    <div className="welcome-roadmap">
+      <div className="welcome-roadmap-heading">
+        <div><h4>More integrations</h4><p>More data and workflow connections are on the way.</p></div>
+        <span className="welcome-roadmap-count">{upcomingCategories.length} coming soon</span>
+      </div>
+      <div className="welcome-integration-grid">
+        {upcomingCategories.map(({ name, logo }) => {
+          const isExpanded = expandedIntegration === name;
+          return <button
+            type="button"
+            className={`welcome-integration-toggle${isExpanded ? ' is-expanded' : ''}`}
+            key={name}
+            onClick={() => setExpandedIntegration(isExpanded ? null : name)}
+            aria-expanded={isExpanded}
+            aria-controls={`upcoming-${logo}`}
+          >
+            <WelcomeCategoryLogo type={logo} />
+            <span><strong>{name}</strong><small>Coming soon</small></span>
+            <ChevronDown size={15} aria-hidden="true" />
+          </button>;
+        })}
+      </div>
+      {expandedIntegration && <div className="welcome-integration-details" id={`upcoming-${welcomeCategories.find(({ name }) => name === expandedIntegration)?.logo}`}>
+        <div className="welcome-integration-details-heading">
+          <strong>{expandedIntegration}</strong><span>Planned capabilities</span>
+        </div>
+        <div className="welcome-integration-prompts">
+          {welcomeStarters.filter(({ category }) => category === expandedIntegration).map(({ prompt, Icon }) => <div className="welcome-integration-prompt" key={prompt}>
+            <Icon size={15} aria-hidden="true" /><span>{prompt}</span><small>Coming soon</small>
+          </div>)}
+        </div>
+      </div>}
+    </div>
   </section>;
+}
+
+function WelcomeCategoryLogo({ type }) {
+  if (type === 'majesco') return <span className="welcome-brand-mark majesco-mark" role="img" aria-label="Majesco"><svg viewBox="0 0 96 24" aria-hidden="true"><g fill="none" strokeLinecap="round" strokeWidth="7"><path d="M4 18 16 6" stroke="#83c341"/><path d="m15 18 12-12" stroke="#43bfca"/><path d="m26 18 12-12" stroke="#356eaa"/></g><text x="43" y="17" fill="#30343a" fontFamily="Arial, sans-serif" fontSize="12" fontWeight="500" letterSpacing=".15">majesco</text></svg></span>;
+  if (type === 'servicenow') return <span className="welcome-brand-mark servicenow-mark" role="img" aria-label="ServiceNow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.1 18.1A10.1 10.1 0 1 1 19.9 18" fill="none" stroke="currentColor" strokeWidth="4.2" strokeLinecap="round"/><path d="M4.1 17.9 6.4 20M19.9 17.9 17.6 20" fill="none" stroke="currentColor" strokeWidth="4.2" strokeLinecap="round"/></svg></span>;
+  if (type === 'azure') return <span className="welcome-brand-mark azure-mark" aria-label="Microsoft Azure logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.3 2.8 5.1 18.4h5.2l2.5-4.7 4.8 7.5h3.1L13.3 2.8Z" fill="currentColor"/><path d="M10.4 18.4h8.4l-2.1-3.2h-4.6l-1.7 3.2Z" fill="#50a8e8"/></svg></span>;
+  if (type === 'github') return <span className="welcome-brand-mark github-mark" role="img" aria-label="GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.08c-3.1.68-3.76-1.32-3.76-1.32-.5-1.3-1.24-1.64-1.24-1.64-1.02-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1 1.71 2.61 1.22 3.24.93.1-.73.39-1.22.71-1.5-2.48-.28-5.09-1.24-5.09-5.52 0-1.22.44-2.22 1.16-3-.12-.29-.5-1.43.11-2.97 0 0 .95-.3 3.05 1.15a10.6 10.6 0 0 1 5.55 0c2.1-1.45 3.04-1.15 3.04-1.15.61 1.54.23 2.68.12 2.97.72.78 1.15 1.78 1.15 3.01 0 4.29-2.61 5.23-5.1 5.5.4.35.76 1.03.76 2.08v3.08c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z"/></svg></span>;
+  if (type === 'confluence') return <span className="welcome-brand-mark confluence-mark" role="img" aria-label="Confluence"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="5.5" fill="currentColor"/><path fill="#fff" d="M5.5 9.2c1.3-2 2.8-2.5 5.1-1.4l3.1 1.5c1.5.7 2.5.7 3.4-.6l1.5 1.8c-1.4 2-3.1 2.3-5.5 1.2l-3.2-1.5c-1.3-.6-2.2-.6-3 .5L5.5 9.2Z"/><path fill="#fff" d="M18.5 14.8c-1.3 2-2.8 2.5-5.1 1.4l-3.1-1.5c-1.5-.7-2.5-.7-3.4.6l-1.5-1.8c1.4-2 3.1-2.3 5.5-1.2l3.2 1.5c1.3.6 2.2.6 3-.5l1.4 1.5Z"/></svg></span>;
+  if (type === 'snowflake') return <span className="welcome-brand-mark snowflake-mark" role="img" aria-label="Snowflake"><Snowflake size={20} strokeWidth={2.2} aria-hidden="true" /></span>;
+  if (type === 'sql-server') return <span className="welcome-brand-mark sql-server-mark" role="img" aria-label="SQL Server"><Database size={20} strokeWidth={2.1} aria-hidden="true" /></span>;
+  if (type === 'oracle') return <span className="welcome-brand-mark oracle-mark" role="img" aria-label="Oracle"><span>ORACLE</span></span>;
+  if (type === 'cosmos-db') return <span className="welcome-brand-mark cosmos-mark" role="img" aria-label="Cosmos DB"><Orbit size={20} strokeWidth={2.1} aria-hidden="true" /></span>;
+  return <span className="welcome-brand-mark jira-mark" aria-label="Jira logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 21.2 12 12 21.2 2.8 12 12 2.8Z" fill="currentColor"/><path d="m12 7.2 4.8 4.8-4.8 4.8L7.2 12 12 7.2Z" fill="#fff"/><path d="m12 9.8 2.2 2.2-2.2 2.2L9.8 12 12 9.8Z" fill="currentColor"/></svg></span>;
 }
 
 function ActivityStatus({ status }) {
