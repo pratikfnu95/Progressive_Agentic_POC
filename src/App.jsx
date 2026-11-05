@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowUp,
   BadgeCheck,
@@ -27,6 +28,8 @@ import {
   BookOpenText,
   Menu,
   PartyPopper,
+  Paperclip,
+  Plus,
   SquarePen,
   Square,
   X,
@@ -47,13 +50,6 @@ function ConnectorLogo({ name }) {
   if (name === 'Oracle') return <span className="connector-oracle-wordmark" aria-hidden="true">ORACLE</span>;
   if (name === 'Cosmos DB') return <Orbit size={16} strokeWidth={2.1} aria-hidden="true" />;
   return <Server size={16} strokeWidth={2.1} aria-hidden="true" />;
-}
-
-function ModelLogo({ provider }) {
-  if (provider === 'DeepSeek') return <Waves size={17} strokeWidth={2.1} aria-hidden="true" />;
-  if (provider === 'OpenAI') return <Orbit size={17} strokeWidth={2.1} aria-hidden="true" />;
-  if (provider === 'Anthropic') return <Asterisk size={17} strokeWidth={2.3} aria-hidden="true" />;
-  return <Sparkles size={17} strokeWidth={2.1} aria-hidden="true" />;
 }
 
 async function readApiResponse(response) {
@@ -137,8 +133,33 @@ const welcomePlaceholders = [
 
 function WelcomePromptChips({ onSelect }) {
   const [expandedIntegration, setExpandedIntegration] = useState(null);
+  const roadmapRef = useRef(null);
   const primaryCategories = welcomeCategories.filter(({ name }) => name === 'Policy data' || name === 'Incident tickets');
   const upcomingCategories = welcomeCategories.filter(({ name }) => !primaryCategories.some((primary) => primary.name === name));
+  const integrationGroups = [
+    { title: 'Data platforms', names: ['Azure', 'Snowflake', 'SQL Server', 'Oracle', 'Cosmos DB'] },
+    { title: 'Team tools', names: ['Jira board', 'GitHub', 'Confluence'] },
+  ];
+
+  useEffect(() => {
+    if (!expandedIntegration) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!roadmapRef.current?.contains(event.target)) {
+        setExpandedIntegration(null);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setExpandedIntegration(null);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [expandedIntegration]);
 
   return <section className="welcome-starters" aria-label="Suggested questions">
     <div className="welcome-starter-grid">
@@ -154,38 +175,46 @@ function WelcomePromptChips({ onSelect }) {
         </button>)}
       </div>)}
     </div>
-    <div className="welcome-roadmap">
+    <div className="welcome-roadmap" ref={roadmapRef}>
       <div className="welcome-roadmap-heading">
-        <div><h4>More integrations</h4><p>More data and workflow connections are on the way.</p></div>
-        <span className="welcome-roadmap-count">{upcomingCategories.length} coming soon</span>
+        <span><span className="welcome-roadmap-title">More integrations</span><span className="welcome-roadmap-description">More data and workflow connections are on the way.</span></span>
       </div>
-      <div className="welcome-integration-grid">
-        {upcomingCategories.map(({ name, logo }) => {
-          const isExpanded = expandedIntegration === name;
-          return <button
-            type="button"
-            className={`welcome-integration-toggle${isExpanded ? ' is-expanded' : ''}`}
-            key={name}
-            onClick={() => setExpandedIntegration(isExpanded ? null : name)}
-            aria-expanded={isExpanded}
-            aria-controls={`upcoming-${logo}`}
-          >
-            <WelcomeCategoryLogo type={logo} />
-            <span><strong>{name}</strong><small>Coming soon</small></span>
-            <ChevronDown size={15} aria-hidden="true" />
-          </button>;
-        })}
+      <div className="welcome-roadmap-content" id="welcome-roadmap-content">
+        {integrationGroups.map(({ title, names }) => <div className="welcome-integration-group" key={title}>
+          <h5 className="welcome-integration-group-heading">{title}</h5>
+          <div className="welcome-integration-grid">
+            {title === 'Data platforms' && <div className="welcome-integration-toggle welcome-integration-connected" aria-label="Databricks connected">
+              <span className="connector-logo connector-databricks"><ConnectorLogo name="Databricks" /></span>
+              <span><strong>Databricks</strong><small className="welcome-integration-connected-status">Connected</small></span>
+            </div>}
+            {upcomingCategories.filter(({ name }) => names.includes(name)).map(({ name, logo }) => {
+              const isExpanded = expandedIntegration === name;
+              return <button
+                type="button"
+                className={`welcome-integration-toggle${isExpanded ? ' is-expanded' : ''}`}
+                key={name}
+                onClick={() => setExpandedIntegration(isExpanded ? null : name)}
+                aria-expanded={isExpanded}
+                aria-controls={`upcoming-${logo}`}
+              >
+                <WelcomeCategoryLogo type={logo} />
+                <span><strong>{name}</strong><small>Coming soon</small></span>
+                <ChevronDown size={15} aria-hidden="true" />
+              </button>;
+            })}
+          </div>
+        </div>)}
+        {expandedIntegration && <div className="welcome-integration-details" id={`upcoming-${welcomeCategories.find(({ name }) => name === expandedIntegration)?.logo}`}>
+          <div className="welcome-integration-details-heading">
+            <strong>{expandedIntegration}</strong><span>Planned capabilities</span>
+          </div>
+          <div className="welcome-integration-prompts">
+            {welcomeStarters.filter(({ category }) => category === expandedIntegration).map(({ prompt, Icon }) => <div className="welcome-integration-prompt" key={prompt}>
+              <Icon size={15} aria-hidden="true" /><span>{prompt}</span><small>Coming soon</small>
+            </div>)}
+          </div>
+        </div>}
       </div>
-      {expandedIntegration && <div className="welcome-integration-details" id={`upcoming-${welcomeCategories.find(({ name }) => name === expandedIntegration)?.logo}`}>
-        <div className="welcome-integration-details-heading">
-          <strong>{expandedIntegration}</strong><span>Planned capabilities</span>
-        </div>
-        <div className="welcome-integration-prompts">
-          {welcomeStarters.filter(({ category }) => category === expandedIntegration).map(({ prompt, Icon }) => <div className="welcome-integration-prompt" key={prompt}>
-            <Icon size={15} aria-hidden="true" /><span>{prompt}</span><small>Coming soon</small>
-          </div>)}
-        </div>
-      </div>}
     </div>
   </section>;
 }
@@ -861,9 +890,74 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
 
 function Composer({ value, setValue, onSend, onStop, isProcessing = false, placeholder, compact = false }) {
   const textareaRef = useRef(null);
+  const modelPickerRef = useRef(null);
+  const attachmentPickerRef = useRef(null);
+  const attachmentTriggerRef = useRef(null);
+  const attachmentMenuRef = useRef(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [attachmentMenuPosition, setAttachmentMenuPosition] = useState(null);
   const canSend = value.trim().length > 0;
+
+  useEffect(() => {
+    if (!modelMenuOpen && !attachmentMenuOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (modelPickerRef.current?.contains(event.target)) {
+        setAttachmentMenuOpen(false);
+        return;
+      }
+      if (attachmentPickerRef.current?.contains(event.target)) {
+        setModelMenuOpen(false);
+        return;
+      }
+      if (attachmentMenuRef.current?.contains(event.target)) {
+        setModelMenuOpen(false);
+        return;
+      }
+      setModelMenuOpen(false);
+      setAttachmentMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setModelMenuOpen(false);
+        setAttachmentMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [modelMenuOpen, attachmentMenuOpen]);
+
+  useLayoutEffect(() => {
+    if (!attachmentMenuOpen) {
+      setAttachmentMenuPosition(null);
+      return undefined;
+    }
+    const placeAttachmentMenu = () => {
+      const trigger = attachmentTriggerRef.current;
+      if (!trigger) return;
+      const bounds = trigger.getBoundingClientRect();
+      const menuHeight = attachmentMenuRef.current?.getBoundingClientRect().height || 72;
+      const sideGap = 12;
+      const width = Math.min(340, window.innerWidth - sideGap * 2);
+      const left = Math.min(Math.max(sideGap, bounds.left), window.innerWidth - width - sideGap);
+      const below = bounds.bottom + 8;
+      const top = below + menuHeight <= window.innerHeight - sideGap
+        ? below
+        : Math.max(sideGap, bounds.top - menuHeight - 8);
+      setAttachmentMenuPosition({ position: 'fixed', top, left, width });
+    };
+    placeAttachmentMenu();
+    window.addEventListener('resize', placeAttachmentMenu);
+    window.addEventListener('scroll', placeAttachmentMenu, true);
+    return () => {
+      window.removeEventListener('resize', placeAttachmentMenu);
+      window.removeEventListener('scroll', placeAttachmentMenu, true);
+    };
+  }, [attachmentMenuOpen]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -881,6 +975,27 @@ function Composer({ value, setValue, onSend, onStop, isProcessing = false, place
 
   return (
     <form className={`composer${compact ? ' composer-compact' : ''}`} onSubmit={submit}>
+      <div className="composer-attachment-picker" ref={attachmentPickerRef}>
+        <button
+          className="composer-attachment-trigger"
+          ref={attachmentTriggerRef}
+          type="button"
+          onClick={() => setAttachmentMenuOpen((open) => !open)}
+          aria-expanded={attachmentMenuOpen}
+          aria-haspopup="dialog"
+          aria-label="Attachments. Photo and file uploads coming soon."
+          title="Attachments coming soon"
+        >
+          <Plus size={19} strokeWidth={2} aria-hidden="true" />
+        </button>
+        {attachmentMenuOpen && createPortal(<div className="composer-attachment-menu" ref={attachmentMenuRef} style={attachmentMenuPosition || undefined} role="dialog" aria-label="Attachments">
+          <button className="composer-attachment-option" type="button" disabled aria-disabled="true">
+            <Paperclip size={17} aria-hidden="true" />
+            <span><strong>Add photos &amp; files</strong><small>Upload from computer</small></span>
+            <em>Coming soon</em>
+          </button>
+        </div>, document.body)}
+      </div>
       <textarea
         ref={textareaRef}
         rows={1}
@@ -895,72 +1010,35 @@ function Composer({ value, setValue, onSend, onStop, isProcessing = false, place
         placeholder={placeholder}
         aria-label="Message"
       />
-      <div className="composer-source-picker">
-        <button
-          className="composer-source-trigger"
-          type="button"
-          onClick={() => {
-            setSourceMenuOpen((open) => !open);
-            setModelMenuOpen(false);
-          }}
-          aria-expanded={sourceMenuOpen}
-          aria-haspopup="listbox"
-          aria-label="Data source selection. Databricks is connected."
-        >
-          <span className="connector-logo connector-databricks"><ConnectorLogo name="Databricks" /></span>
-          <span>Databricks</span>
-          <ChevronDown className={sourceMenuOpen ? 'is-open' : ''} size={14} aria-hidden="true" />
-        </button>
-        {sourceMenuOpen && <div className="composer-source-menu" role="listbox" aria-label="Data sources">
-          {[
-            { name: 'Databricks', detail: 'Connected', status: 'active' },
-            { name: 'Snowflake', detail: 'Coming soon' },
-            { name: 'SQL Server', detail: 'Coming soon' },
-            { name: 'Oracle', detail: 'Coming soon' },
-            { name: 'Cosmos DB', detail: 'Coming soon' },
-          ].map((source) => <div
-            className={`composer-source-option${source.status === 'active' ? ' is-current' : ' is-unavailable'}`}
-            key={source.name}
-            role="option"
-            aria-selected={source.status === 'active'}
-            aria-disabled={source.status !== 'active'}
-          >
-            <span className={`connector-logo connector-${source.name.toLowerCase().replace(/\s+/g, '-')}`}><ConnectorLogo name={source.name} /></span>
-            <span className="composer-source-copy"><strong>{source.name}</strong><small>{source.detail}</small></span>
-          </div>)}
-        </div>}
-      </div>
-      <div className="composer-model-picker">
+      <div className="composer-model-picker" ref={modelPickerRef}>
         <button
           className="composer-model-trigger"
           type="button"
           onClick={() => {
             setModelMenuOpen((open) => !open);
-            setSourceMenuOpen(false);
           }}
           aria-expanded={modelMenuOpen}
           aria-haspopup="listbox"
           aria-label="Model selection. DeepSeek is active."
         >
-          <span className="model-provider-logo model-deepseek"><ModelLogo provider="DeepSeek" /></span>
           <span>DeepSeek</span>
           <ChevronDown className={modelMenuOpen ? 'is-open' : ''} size={15} aria-hidden="true" />
         </button>
         {modelMenuOpen && <div className="composer-model-menu" role="listbox" aria-label="Available AI models">
           <div className="composer-model-option is-current" role="option" aria-selected="true">
-            <span className="composer-model-option-main"><span className="model-provider-logo model-deepseek"><ModelLogo provider="DeepSeek" /></span><span><strong>DeepSeek</strong><small>Connected</small></span></span>
+            <span className="composer-model-option-main"><span><strong>DeepSeek</strong><small>Connected</small></span></span>
             <span className="composer-model-status"><Check size={13} /> Active</span>
           </div>
           <div className="composer-model-option is-unavailable" aria-disabled="true">
-            <span className="composer-model-option-main"><span className="model-provider-logo model-openai"><ModelLogo provider="OpenAI" /></span><span><strong>OpenAI GPT-6.1 Sol</strong><small>OpenAI</small></span></span>
+            <span className="composer-model-option-main"><span><strong>OpenAI GPT-6.1 Sol</strong><small>OpenAI</small></span></span>
             <span className="composer-model-status">Coming soon</span>
           </div>
           <div className="composer-model-option is-unavailable" aria-disabled="true">
-            <span className="composer-model-option-main"><span className="model-provider-logo model-anthropic"><ModelLogo provider="Anthropic" /></span><span><strong>Claude Sonnet 5</strong><small>Anthropic</small></span></span>
+            <span className="composer-model-option-main"><span><strong>Claude Sonnet 5</strong><small>Anthropic</small></span></span>
             <span className="composer-model-status">Coming soon</span>
           </div>
           <div className="composer-model-option is-unavailable" aria-disabled="true">
-            <span className="composer-model-option-main"><span className="model-provider-logo model-google"><ModelLogo provider="Google" /></span><span><strong>Gemini 4 Argon</strong><small>Google</small></span></span>
+            <span className="composer-model-option-main"><span><strong>Gemini 4 Argon</strong><small>Google</small></span></span>
             <span className="composer-model-status">Coming soon</span>
           </div>
         </div>}
