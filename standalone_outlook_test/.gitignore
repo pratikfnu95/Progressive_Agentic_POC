@@ -1,0 +1,2 @@
+# The encrypted MSAL token cache contains reusable sign-in credentials.
+.*token_cache*
