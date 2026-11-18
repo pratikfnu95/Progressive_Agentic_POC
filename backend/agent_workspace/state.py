@@ -55,7 +55,21 @@ def update_event(event: dict[str, Any]) -> dict[str, Any]:
         events = []
     events = [current for current in events if current.get("id") != event.get("id")]
     events.insert(0, event)
-    state["events"] = events[:25]
+    state["events"] = events[:100]
+    state["updated_at"] = utc_now()
+    write_state(state)
+    return state
+
+
+def update_execution(execution: dict[str, Any]) -> dict[str, Any]:
+    """Insert or refresh a persisted agent execution for the workspace history."""
+    state = read_state()
+    executions = state.get("executions")
+    if not isinstance(executions, list):
+        executions = []
+    executions = [current for current in executions if current.get("id") != execution.get("id")]
+    executions.insert(0, execution)
+    state["executions"] = executions[:100]
     state["updated_at"] = utc_now()
     write_state(state)
     return state

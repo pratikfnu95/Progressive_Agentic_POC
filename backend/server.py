@@ -60,6 +60,7 @@ def agent_workspace_status(request: Request):
         "jira_base_url": state.get("jira_base_url", ""),
         "baseline_count": state.get("baseline_count", 0),
         "error": state.get("error", ""),
+        "executions": state.get("executions", []) if isinstance(state.get("executions", []), list) else [],
         "updated_at": state.get("updated_at"),
         "counts": {
             "emails": len(seen_ids) if isinstance(seen_ids, list) else len(events),

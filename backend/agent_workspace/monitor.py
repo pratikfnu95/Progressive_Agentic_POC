@@ -21,7 +21,7 @@ from backend.agent_workspace.integrations import (
     _jira_get,
     _jira_settings,
 )
-from backend.agent_workspace.state import read_state, update_event, update_state, utc_now
+from backend.agent_workspace.state import read_state, update_event, update_execution, update_state, utc_now
 from backend.deepseek_client import DeepSeekAPIError, chat_completion
 
 MAX_BODY_CHARS = 20_000
@@ -325,12 +325,13 @@ def _create_jira_issue(items: list[dict], project_key: str) -> dict:
         raise RuntimeError(f"Jira request failed ({type(error).__name__}).") from None
 
 
-def _create_event(message: dict, message_id: str, extracted: dict | None = None) -> dict:
+def _create_event(message: dict, message_id: str, run_id: str, extracted: dict | None = None) -> dict:
     sender = ((message.get("from") or {}).get("emailAddress") or {}).get("address") or "Unknown sender"
     recovered = bool(message.get("_recovered_from_junk"))
     moved_to_inbox = bool(message.get("_moved_to_inbox"))
     return {
         "id": _message_hash(message_id),
+        "run_id": run_id,
         "subject": str(message.get("subject") or "(no subject)")[:300],
         "sender": str(sender)[:320],
         "received_at": str(message.get("receivedDateTime") or utc_now()),
@@ -372,6 +373,7 @@ def check_inbox_now() -> dict:
     """Process every inbox email in the window since the last successful manual check."""
     if not _CHECK_LOCK.acquire(blocking=False):
         raise InboxCheckInProgress("An inbox check is already in progress.")
+    execution: dict | None = None
     try:
         state = read_state()
         end_at = datetime.now(timezone.utc)
@@ -380,16 +382,27 @@ def check_inbox_now() -> dict:
             start_at = datetime.fromisoformat(str(previous).replace("Z", "+00:00")).astimezone(timezone.utc)
         else:
             # First manual run establishes a clean starting point and never imports old inbox mail.
-            update_state(monitor_status="manual", last_run_at=end_at.isoformat(timespec="milliseconds"), last_poll_at=end_at.isoformat(timespec="milliseconds"), last_run_result={"status": "baseline", "message": "Initial baseline captured; pre-existing inbox mail was not processed."}, error="")
-            return {"status": "baseline", "emails_found": 0, "tickets_created": 0, "duplicates_grouped": 0, "message": "Initial baseline captured. New email will be processed on the next check."}
+            sequence = int(state.get("execution_sequence", 0)) + 1
+            run_id = f"RUN-{sequence:04d}"
+            finished_at = end_at.isoformat(timespec="milliseconds")
+            execution = {"id": run_id, "status": "completed", "started_at": finished_at, "completed_at": finished_at, "current_step": "Baseline captured", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Initial baseline captured; pre-existing inbox mail was not processed."}
+            update_execution(execution)
+            update_state(execution_sequence=sequence, monitor_status="manual", last_run_at=finished_at, last_poll_at=finished_at, last_run_result={"status": "baseline", "message": "Initial baseline captured; pre-existing inbox mail was not processed."}, error="")
+            return {"id": run_id, "status": "baseline", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "message": "Initial baseline captured. New email will be processed on the next check."}
+
+        sequence = int(state.get("execution_sequence", 0)) + 1
+        run_id = f"RUN-{sequence:04d}"
+        run_started_at = end_at.isoformat(timespec="milliseconds")
+        execution = {"id": run_id, "status": "running", "started_at": run_started_at, "completed_at": None, "current_step": "Connecting to Outlook and Jira", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Agent run started."}
+        update_execution(execution)
+        update_state(execution_sequence=sequence)
 
         base_url, email, api_token, project_key = _jira_settings()
         _jira_get(base_url, email, api_token, f"/rest/api/3/project/{quote(project_key, safe='')}")
         outlook_token = _get_outlook_token()
-        run_id = hashlib.sha256(f"{start_at.isoformat()}:{end_at.isoformat()}".encode()).hexdigest()[:12]
         update_state(
             monitor_status="checking",
-            current_run={"id": run_id, "started_at": end_at.isoformat(timespec="milliseconds"), "window_start": start_at.isoformat(timespec="milliseconds"), "window_end": end_at.isoformat(timespec="milliseconds")},
+            current_run={"id": run_id, "started_at": run_started_at, "window_start": start_at.isoformat(timespec="milliseconds"), "window_end": end_at.isoformat(timespec="milliseconds"), "current_step": "Reading the inbox window"},
             error="",
         )
         processed = set(state.get("processed_message_hashes", []))
@@ -420,6 +433,9 @@ def check_inbox_now() -> dict:
             inbox_headers + recoverable_junk_headers,
             key=lambda header: str(header.get("receivedDateTime") or ""),
         )
+        execution.update({"emails_found": len(headers), "current_step": f"Analyzing {len(headers)} email(s)" if headers else "No new emails found"})
+        update_execution(execution)
+        update_state(current_run={**(read_state().get("current_run") or {}), "current_step": execution["current_step"]})
         candidate_headers = []
         for header in headers:
             if not header.get("id"):
@@ -429,6 +445,8 @@ def check_inbox_now() -> dict:
             already_completed = previous_event.get("status") in ("created", "duplicate")
             if digest not in processed and not already_completed:
                 candidate_headers.append(header)
+        execution["emails_skipped"] = max(0, len(headers) - len(candidate_headers))
+        update_execution(execution)
         seen_email_ids = list(state.get("seen_email_ids", []))
         seen_set = set(seen_email_ids)
         newly_seen_ids = [_message_hash(str(item["id"])) for item in candidate_headers if _message_hash(str(item["id"])) not in seen_set]
@@ -438,13 +456,17 @@ def check_inbox_now() -> dict:
         failures = 0
         for header in candidate_headers:
             message_id = str(header["id"])
-            event = _create_event(header, message_id)
+            event = _create_event(header, message_id, run_id)
             update_event(event)
+            execution["event_ids"] = list(dict.fromkeys([*execution.get("event_ids", []), event["id"]]))
+            update_execution(execution)
             try:
                 message = _get_message(outlook_token, message_id, str(header.get("_folder_url") or GRAPH_INBOX_URL))
                 body = _plain_text(message)
                 if not body:
                     raise RuntimeError("Email has no readable text.")
+                event["body_preview"] = body[:2000]
+                update_event(event)
                 extracted = _classify_and_summarize(message, body)
                 event.update({key: extracted[key] for key in ("intent", "summary", "description")})
                 _step(event, "intent", "complete", "Intent and ticket context extracted")
@@ -460,6 +482,9 @@ def check_inbox_now() -> dict:
                 _mark_failed(event, "intent", str(error))
                 failures += 1
 
+        execution["current_step"] = "Checking for duplicate incidents"
+        update_execution(execution)
+        update_state(current_run={**(read_state().get("current_run") or {}), "current_step": execution["current_step"]})
         test_report_indices = [index for index, item in enumerate(batch) if item.get("force_new_ticket")]
         regular_indices = [index for index, item in enumerate(batch) if not item.get("force_new_ticket")]
         groups: list[list[int]] = [[index] for index in test_report_indices]
@@ -481,6 +506,9 @@ def check_inbox_now() -> dict:
             if not group:
                 continue
             try:
+                execution["current_step"] = "Creating Jira tickets"
+                update_execution(execution)
+                update_state(current_run={**(read_state().get("current_run") or {}), "current_step": execution["current_step"]})
                 force_new = all(item.get("force_new_ticket") for item in group)
                 if force_new:
                     for item in group:
@@ -501,7 +529,7 @@ def check_inbox_now() -> dict:
                     update_state(duplicate_email_ids=duplicate_ids[-10_000:])
                     for item in group:
                         event = item["event"]
-                        event.update({"jira_key": issue_key, "jira_url": issue_url, "status": "duplicate"})
+                        event.update({"jira_key": issue_key, "jira_url": issue_url, "jira_project_key": project_key, "status": "duplicate"})
                         _step(event, "duplicate", "duplicate", f"Matched existing Jira issue {issue_key}")
                         _step(event, "jira", "skipped", "No new Jira issue created")
                         processed_now.append(event["id"])
@@ -534,7 +562,7 @@ def check_inbox_now() -> dict:
                     update_state(ticket_keys=ticket_keys[-10_000:])
                 for index, item in enumerate(group):
                     event = item["event"]
-                    event.update({"jira_key": issue_key, "jira_url": issue_url})
+                    event.update({"jira_key": issue_key, "jira_url": issue_url, "jira_project_key": project_key})
                     if index == 0:
                         event["status"] = "created"
                         _step(event, "jira", "complete", f"{issue_key} created · Medium · Unassigned")
@@ -548,6 +576,14 @@ def check_inbox_now() -> dict:
                 for item in group:
                     if item["event"].get("status") not in ("failed",):
                         _mark_failed(item["event"], "jira", str(error))
+
+        # Record the notification checkpoint even while requester acknowledgements are disabled.
+        for event in read_state().get("events", []):
+            if event.get("run_id") != run_id:
+                continue
+            notification = next((step for step in event.get("steps", []) if step.get("key") == "notify"), None)
+            if notification and notification.get("status") == "skipped" and not notification.get("at"):
+                _step(event, "notify", "skipped", "Requester notification not sent; email acknowledgement is not enabled")
 
         # A partial run keeps the old watermark. Successfully handled message hashes remain
         # durable so a retry of that window skips them and cannot create a second Jira issue.
@@ -574,6 +610,7 @@ def check_inbox_now() -> dict:
             "window_end": end_at.isoformat(timespec="milliseconds"),
             "emails_found": len(headers),
             "emails_processed": max(0, len(candidate_headers) - failures),
+            "emails_skipped": max(0, len(headers) - len(candidate_headers)),
             "junk_reports_recovered": recovered_count,
             "junk_reports_moved": moved_count,
             "junk_move_failures": move_failure_count,
@@ -582,6 +619,22 @@ def check_inbox_now() -> dict:
             "failures": failures,
             "message": result_message,
         }
+        execution.update({
+            "status": "completed" if complete else "partially_completed",
+            "completed_at": utc_now(),
+            "current_step": "Run completed" if complete else "Run completed with errors",
+            "emails_found": len(headers),
+            "emails_processed": result["emails_processed"],
+            "emails_skipped": result["emails_skipped"],
+            "tickets_created": tickets_created,
+            "duplicates_grouped": duplicates_grouped,
+            "failures": failures,
+            "event_ids": list(dict.fromkeys([*execution.get("event_ids", []), *[item["event"]["id"] for item in batch]])),
+            "message": result_message,
+            "window_start": result["window_start"],
+            "window_end": result["window_end"],
+        })
+        update_execution(execution)
         update_state(
             monitor_status="manual",
             last_check_at=utc_now(),
@@ -595,11 +648,14 @@ def check_inbox_now() -> dict:
         return result
     except (IntegrationCheckError, RuntimeError, DeepSeekAPIError, ValueError) as error:
         state = read_state()
+        if execution:
+            execution.update({"status": "failed", "completed_at": utc_now(), "current_step": "Run failed", "message": str(error)[:500], "failures": max(1, int(execution.get("failures", 0)))})
+            update_execution(execution)
         update_state(
             monitor_status="manual",
             current_run=None,
             last_check_at=utc_now(),
-            last_run_result={"status": "failed", "message": str(error)[:500]},
+            last_run_result={"id": execution.get("id") if execution else "", "status": "failed", "message": str(error)[:500]},
             error=str(error)[:500],
         )
         raise RuntimeError(str(error)) from None
