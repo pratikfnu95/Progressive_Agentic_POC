@@ -77,15 +77,26 @@ def generate_sql(question: str, schema: str) -> str:
         temperature=0,
         max_tokens=1200,
     )
-    try:
-        response = asyncio.run(llm_service.send_request(request))
-    except Exception as error:
-        LOGGER.warning("Vanna/DeepSeek SQL generation failed (%s)", type(error).__name__)
-        raise SqlGenerationError(
-            "SQL generation failed. Check the server-side DeepSeek configuration and try again."
-        ) from None
+    response = None
+    content = ""
+    for attempt in range(2):
+        try:
+            response = asyncio.run(llm_service.send_request(request))
+        except Exception as error:
+            LOGGER.warning("Vanna/DeepSeek SQL generation failed (%s)", type(error).__name__)
+            raise SqlGenerationError(
+                "SQL generation failed. Check the server-side DeepSeek configuration and try again."
+            ) from None
 
-    content = (response.content or "").strip()
+        content = (response.content or "").strip()
+        if content:
+            break
+        if attempt == 0:
+            LOGGER.warning(
+                "Vanna/DeepSeek SQL generation returned empty content; retry=1 finish_reason=%s",
+                response.finish_reason,
+            )
+
     if not content:
         raise SqlGenerationError("The model returned an empty SQL response.")
     if content.upper().startswith("CLARIFICATION:"):

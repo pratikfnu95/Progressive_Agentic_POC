@@ -113,16 +113,27 @@ def _safe_generation_error(error: Exception) -> str:
 
 
 def _discover_schema_with_retry() -> str:
-    """Retry one transient warehouse lock while reading Gold table metadata."""
+    """Retry once on known transient warehouse failures during schema discovery."""
     for attempt in range(2):
         try:
             return discover_gold_schema()
         except Exception as error:
-            is_transient_lock = "deadlock" in str(error).lower() or "lock" in str(error).lower()
-            if attempt or not is_transient_lock:
+            message = str(error).lower()
+            is_transient = (
+                "deadlock" in message
+                or "lock" in message
+                or (
+                    "cannot create the resource" in message
+                    and "try again later" in message
+                )
+            )
+            if attempt or not is_transient:
                 raise
-            LOGGER.warning("stage=schema_discovery transient_warehouse_lock retry=1")
-            time.sleep(0.25)
+            LOGGER.warning(
+                "stage=schema_discovery transient_databricks_error type=%s retry=1",
+                type(error).__name__,
+            )
+            time.sleep(0.5)
     raise RuntimeError("Databricks schema discovery did not complete.")
 
 

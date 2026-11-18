@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertCircle, ArrowLeft, ArrowUpRight, BadgeCheck, BookOpenCheck, CalendarDays,
   Check, ChevronDown, ChevronRight, CircleDashed, FileWarning, Filter,
-  Hand, LogIn, LogOut, Plus, RefreshCw, Search, ShieldAlert,
+  Hand, LogIn, LogOut, Mail, Plus, RefreshCw, Search, ShieldAlert,
   ArrowDown, ArrowUp, ArrowUpDown,
   Ticket, UserRound, X,
 } from 'lucide-react';
 import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 import { IncidentTicketForm } from './IncidentTicketForm.jsx';
+import { ReportIssueForm } from './ReportIssueForm.jsx';
 import { ProgressiveSelect } from './ProgressiveSelect.jsx';
 
 const INCIDENT_CACHE_TTL_MS = 30_000;
@@ -106,13 +107,14 @@ const shortcuts = [
   [Hand, 'Analyze policy data', 'Check data and identify discrepancies'],
 ];
 
-function DashboardHeader({ title, subtitle, onCreate, onRefresh, refreshing = false, lastUpdated = null }) {
+function DashboardHeader({ title, subtitle, onCreate, onReportIssue, onRefresh, refreshing = false, lastUpdated = null }) {
   return (
     <header className="dashboard-header">
       <div><div className="dashboard-title-line"><h1>{title}</h1></div><p>{subtitle}</p></div>
       <div className="dashboard-header-actions">
         {onRefresh && <button type="button" className="dashboard-refresh-button" onClick={onRefresh} disabled={refreshing} aria-label={refreshing ? 'Refreshing incident data' : 'Refresh incident data'} title={lastUpdated ? `Refresh incident data · Last refreshed ${formatIncidentTimestamp(lastUpdated)}` : 'Refresh incident data'}><RefreshCw size={16} className={refreshing ? 'is-refreshing' : ''} /></button>}
         {onCreate && <button className="dashboard-primary-button" onClick={onCreate}><Plus size={17} />Create New Ticket</button>}
+        {onReportIssue && <button type="button" className="dashboard-report-button" onClick={onReportIssue}><Mail size={16} />Report an Issue</button>}
       </div>
     </header>
   );
@@ -376,6 +378,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
         : modal.type === 'status' ? 'Update ticket status'
         : modal.type === 'decline' ? 'Decline this request?'
           : modal.type === 'create_ticket' ? 'Create incident ticket'
+          : modal.type === 'report_issue' ? 'Report an issue'
           : modal.type === 'login' ? 'Sign in to manage this ticket'
           : 'Demo preview';
 
@@ -426,7 +429,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
     }
   }
 
-  return <div className="dashboard-modal-backdrop" role="presentation" onClick={onClose}><section className={`dashboard-modal${['details', 'create_ticket'].includes(modal.type) ? ' dashboard-ticket-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title" onClick={(event) => event.stopPropagation()}>
+  return <div className="dashboard-modal-backdrop" role="presentation" onClick={onClose}><section className={`dashboard-modal${['details', 'create_ticket', 'report_issue'].includes(modal.type) ? ' dashboard-ticket-modal' : ''}${modal.type === 'report_issue' ? ' dashboard-report-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title" onClick={(event) => event.stopPropagation()}>
     {hasPreviousModal && <button className="dashboard-modal-back" type="button" onClick={goBack} aria-label={modal.type === 'actions' || modal.type === 'login' ? 'Back to ticket details' : 'Back to ticket actions'}><ArrowLeft size={18} /><span>Back</span></button>}
     <button className="dashboard-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
     <h2 id="dashboard-modal-title">{title}</h2>
@@ -452,6 +455,7 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
       if (created) onClose();
       return created;
     }} />}
+    {modal.type === 'report_issue' && <ReportIssueForm onClose={onClose} />}
     {modal.type === 'actions' && <>
       <p className="dashboard-modal-intro">Choose what to do with <strong>{ticket.ticket_id}</strong>.</p>
       <div className="ticket-action-choices">
@@ -480,10 +484,10 @@ function DashboardModal({ modal, onClose, onModal, onAssign, onUnassign, onDecli
   </section></div>;
 }
 
-function IncidentDashboard({ tickets, activity, onModal, onOpenDetails, onCreate, pendingTicketId, onRefresh, refreshing, lastUpdated }) {
+function IncidentDashboard({ tickets, activity, onModal, onOpenDetails, onCreate, onReportIssue, pendingTicketId, onRefresh, refreshing, lastUpdated }) {
   const [selectedStatus, setSelectedStatus] = useState(null);
   const visibleTickets = selectedStatus ? tickets.filter((ticket) => ticket.ticket_status === selectedStatus) : tickets;
-  return <><DashboardHeader title="Incident Management" subtitle="Track, investigate and resolve data and policy issues." onRefresh={onRefresh} refreshing={refreshing} lastUpdated={lastUpdated} onCreate={onCreate} />
+  return <><DashboardHeader title="Incident Management" subtitle="Track, investigate and resolve data and policy issues." onRefresh={onRefresh} refreshing={refreshing} lastUpdated={lastUpdated} onCreate={onCreate} onReportIssue={onReportIssue} />
     <StatCards stats={incidentStats(tickets)} label="Ticket metrics from test data" onStatusSelect={setSelectedStatus} selectedStatus={selectedStatus} statusTiles /><div className="dashboard-primary-grid incident-primary-grid"><TicketsTable tickets={visibleTickets} onOpenDetails={onOpenDetails} pendingTicketId={pendingTicketId} activeStatus={selectedStatus} totalTicketCount={tickets.length} onClearStatusFilter={() => setSelectedStatus(null)} /></div><div className="dashboard-lower-grid"><TicketBreakdown tickets={tickets} /><ActivityPanel events={activity} /></div></>;
 }
 
@@ -518,7 +522,7 @@ function PolicyDashboard({ onModal }) {
     <StatCards stats={policyStats} /><div className="dashboard-primary-grid policy-primary-grid"><div className="dashboard-main-column"><TrendPanel /><TicketsTable policy /></div><AssistantPanel onAction={onModal} /></div><div className="dashboard-lower-grid"><IssueCategories /><ActivityPanel policy /></div></>;
 }
 
-export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
+export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowItWorks }) {
   const [modal, setModal] = useState('');
   const [mutationNotice, setMutationNotice] = useState(null);
   const mutationNoticeId = useRef(null);
@@ -710,15 +714,15 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout }) {
   }
 
   return <section className="dashboard-page">
-    <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} /></div>
-    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onCreate={() => setModal({ type: 'create_ticket' })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
+    <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} /></div>
+    <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onCreate={() => setModal({ type: 'create_ticket' })} onReportIssue={() => setModal({ type: 'report_issue' })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
       <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Databricks</p>
     </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onCreateTicket={createIncidentTicket} onLogin={onLogin} currentUser={currentUser} />
     {isIncident && <IncidentMutationToast notice={mutationNotice} onClose={() => { mutationNoticeId.current = null; setMutationNotice(null); }} />}
   </section>;
 }
 
-export function UserAccountMenu({ currentUser, onLogin, onLogout }) {
+export function UserAccountMenu({ currentUser, onLogin, onLogout, onOpenHowItWorks }) {
   const [open, setOpen] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [busyUser, setBusyUser] = useState('');
@@ -759,6 +763,7 @@ export function UserAccountMenu({ currentUser, onLogin, onLogout }) {
     {open && <div className="user-account-popover" role="menu">
       <div className="user-account-popover-heading"><span>{currentUser ? 'Switch account' : 'Choose an account'}</span>{currentUser && <strong>Signed in as {currentUser}</strong>}</div>
       {accountNames.map((person) => <button type="button" key={person} role="menuitem" className={currentUser === person ? 'is-current' : ''} disabled={Boolean(busyUser)} onClick={() => chooseAccount(person)}><span className={`user-account-avatar ${accountAvatarClass(person)}`}>{person[0]}</span><span>{person}</span>{busyUser === person ? <span className="account-switch-spinner" aria-label="Switching account" /> : currentUser === person ? <Check size={15} /> : null}</button>)}
+      {currentUser === 'Admin' && onOpenHowItWorks && <button type="button" className="user-account-guide" role="menuitem" onClick={() => { setOpen(false); onOpenHowItWorks(); }}><BookOpenCheck size={15} /><span>How this works</span><ChevronRight size={13} /></button>}
       {loginError && <small className="user-account-error" role="alert">{loginError}</small>}
       {currentUser && <button className="user-account-logout" role="menuitem" onClick={() => { onLogout(); setOpen(false); }}><LogOut size={15} />Log out</button>}
       {!currentUser && <small><LogIn size={12} /> Select your account to continue</small>}

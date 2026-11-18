@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   ArrowUp,
   BadgeCheck,
+  Bot,
   CalendarDays,
   ChartNoAxesColumnIncreasing,
   Check,
@@ -39,6 +40,7 @@ import { IncidentResolutionGuide } from './IncidentResolutionGuide.jsx';
 import { HowItWorksPage } from './HowItWorksPage.jsx';
 import { IncidentTicketForm } from './IncidentTicketForm.jsx';
 import { ProgressiveSelect } from './ProgressiveSelect.jsx';
+import { AgentCatalog, AgentWorkspace } from './AgentWorkspace.jsx';
 
 const logoPath = import.meta.env.VITE_PROGRESSIVE_LOGO_PATH || '/assets/progressive-fleet-logo.png';
 const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets/sidebar-illustration.png';
@@ -849,6 +851,10 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
           <SquarePen size={23} strokeWidth={2} />
           <span>New chat</span>
         </button>
+        <button className={`side-action${currentPage === 'agent' || currentPage === 'incident-agent' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('agent')} aria-current={currentPage === 'agent' || currentPage === 'incident-agent' ? 'page' : undefined} title="Open Agent Workspace">
+          <Bot size={18} strokeWidth={1.8} />
+          <span>Agent Workspace</span>
+        </button>
         <button className={`side-action${currentPage === 'incidents' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('incidents')} aria-current={currentPage === 'incidents' ? 'page' : undefined} title="View incident tickets and activity">
           <ClipboardList size={18} strokeWidth={1.8} />
           <span>Incident Management</span>
@@ -856,10 +862,6 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
         <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')} aria-current={currentPage === 'policies' ? 'page' : undefined} title="View policy insights">
           <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
           <span>Policy Dashboard</span>
-        </button>
-        <button className={`side-action${currentPage === 'guide' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('guide')} title="POC walkthrough, current capabilities, and architecture" aria-current={currentPage === 'guide' ? 'page' : undefined}>
-          <BookOpenText size={18} strokeWidth={1.8} />
-          <span>How this works</span>
         </button>
       </nav>
 
@@ -1528,14 +1530,18 @@ function App() {
         </button>
         {currentPage === 'guide' ? (
           <>
-            <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
+            <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} /></div>
             <HowItWorksPage onUsePrompt={openPromptInChat} onNavigate={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }} />
           </>
+        ) : currentPage === 'agent' ? (
+          <AgentCatalog currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenIncident={() => setCurrentPage('incident-agent')} onOpenHowItWorks={() => setCurrentPage('guide')} />
+        ) : currentPage === 'incident-agent' ? (
+          <AgentWorkspace currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onBack={() => setCurrentPage('agent')} onOpenHowItWorks={() => setCurrentPage('guide')} />
         ) : currentPage !== 'chat' ? (
-          <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} />
+          <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} />
         ) : !activeChat ? (
           <>
-          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} /></div>
           <section className="welcome-view">
             <div className="welcome-content">
               <h2 key={`${currentUser || 'guest'}-${welcomePrompt.heading}`}>
@@ -1557,7 +1563,7 @@ function App() {
           </>
         ) : (
           <>
-          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} /></div>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} /></div>
           <section className="conversation-view">
             <div className="conversation-scroll">
               <div className="message-list">
