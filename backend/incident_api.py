@@ -1,13 +1,14 @@
-"""HTTP dispatch for Databricks-backed incident workflows."""
+"""HTTP dispatch for Jira-backed incident workflows."""
 
 from __future__ import annotations
 
 import logging
 
 from backend.api_service import ApiError, _is_authenticated
+from backend.agent_workspace.integrations import IntegrationCheckError
 from backend.deepseek_client import DeepSeekAPIError
 from backend.incident_auth import current_account, select_account
-from backend.incident_service import IncidentError, handle_incident_request
+from backend.jira_incident_service import IncidentError, handle_incident_request
 from backend.incident_resolution import generate_resolution_guidance
 
 LOGGER = logging.getLogger("progressive_ai.incident_api")
@@ -44,23 +45,25 @@ def dispatch_incident_request(payload: dict, cookie_header: str = "") -> tuple[i
         if data.pop("assignment_action", False) and data.get("ticket"):
             # Keep the confirmed assignment response fast. The UI fetches this
             # optional guidance separately so reference generation cannot hold
-            # up the Databricks-backed ticket action.
+            # up the Jira ticket action.
             data["resolution_guidance_pending"] = True
         return 200, data, None
     except ApiError as error:
         return error.status, {"error": error.message, "access_required": True}, None
     except IncidentError as error:
         return error.status, {"error": str(error)}, None
+    except IntegrationCheckError as error:
+        return error.status_code, {"error": str(error)}, None
     except DeepSeekAPIError:
         LOGGER.warning("incident request failed at intent_classification")
         return 502, {"error": "The assistant couldn't interpret this ticket request. Try again or rephrase it."}, None
     except Exception as error:
         text = str(error).lower()
         if "permission_denied" in text or "not authorized" in text or "access denied" in text:
-            LOGGER.warning("incident request failed with Databricks permission denial")
-            return 502, {"error": "Databricks denied access to the incident tables. Grant the app service principal SELECT and MODIFY permissions on the incident tables."}, None
+            LOGGER.warning("incident request failed with an integration permission denial")
+            return 502, {"error": "The connected Jira account does not have permission to access this incident operation."}, None
         if "timed out" in text or "timeout" in text:
-            LOGGER.warning("incident request failed with Databricks timeout")
-            return 504, {"error": "The incident query exceeded the 30-second limit. Try again."}, None
+            LOGGER.warning("incident request failed with Jira timeout")
+            return 504, {"error": "The Jira request timed out. Try again."}, None
         LOGGER.error("incident request failed type=%s", type(error).__name__)
         return 502, {"error": "The incident service could not complete that request. Check the server logs for its request type."}, None

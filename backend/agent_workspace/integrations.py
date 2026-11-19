@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import re
@@ -337,6 +338,62 @@ def send_outlook_test_email(subject: str, body: str, report_id: str) -> dict[str
         }
         update_state(sent_report_emails=(sent_reports + [sent_record])[-1000:])
         return {"sent": True, "outlook_accepted": True, "already_sent": False, **sent_record}
+
+
+def send_jira_ticket_notification(ticket_key: str, summary: str, priority: str, jira_url: str) -> dict[str, str]:
+    """Send the concise Jira assignment notice to the single configured POC recipient."""
+    clean_key = re.sub(r"[^A-Z0-9-]", "", str(ticket_key or "").upper())
+    clean_summary = re.sub(r"[\r\n]+", " ", str(summary or "")).strip()[:250]
+    clean_priority = re.sub(r"[\r\n]+", " ", str(priority or "Medium")).strip()[:40]
+    parsed_jira_url = urlsplit(str(jira_url or ""))
+    if not clean_key or not clean_summary or parsed_jira_url.scheme != "https" or not parsed_jira_url.netloc:
+        raise IntegrationCheckError("The Jira ticket details are incomplete; notification was not sent.", code="invalid_ticket_notification")
+
+    recipient = "smartwealthai15@outlook.com"
+    subject = f"Jira ticket {clean_key} assigned to you"
+    body = (
+        "<p>Hi Pratik,</p>"
+        f"<p>Jira ticket <strong>{html.escape(clean_key)}</strong> has been created and assigned to you for "
+        f"<strong>{html.escape(clean_summary)}</strong> ({html.escape(clean_priority)}).</p>"
+        f'<p><a href="{html.escape(str(jira_url), quote=True)}">Click here for more detail.</a></p>'
+    )
+    token = _get_outlook_token([GRAPH_SCOPE, GRAPH_SEND_SCOPE])
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": body},
+            "toRecipients": [{"emailAddress": {"address": recipient}}],
+        },
+        "saveToSentItems": True,
+    }
+    request = Request(
+        GRAPH_SEND_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            if response.status not in (200, 202):
+                raise IntegrationCheckError(f"Microsoft Graph returned HTTP {response.status} while sending the Jira notification.", status_code=502, code="notification_failed")
+    except HTTPError as error:
+        if error.code == 403:
+            raise IntegrationCheckError(
+                "Outlook denied the Jira notification. Confirm Mail.Send consent in the Outlook connection card, then reconnect Outlook.",
+                status_code=502,
+                code="mail_send_permission_denied",
+            ) from None
+        raise IntegrationCheckError(f"Microsoft Graph returned HTTP {error.code} while sending the Jira notification.", status_code=502, code="notification_failed") from None
+    except (URLError, TimeoutError) as error:
+        raise IntegrationCheckError(f"Could not reach Microsoft Graph ({type(error).__name__}) while sending the Jira notification.", status_code=502, code="network_error") from None
+
+    return {
+        "recipient": recipient,
+        "subject": subject,
+        # Graph's 202 only means that Exchange accepted the request. The monitor
+        # confirms mailbox delivery separately before presenting a green status.
+        "accepted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
 
 
 def test_outlook_connection() -> dict[str, object]:

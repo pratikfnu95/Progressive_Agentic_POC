@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  Activity, ArrowLeft, ArrowRight, Bot, Check, ChevronRight,
-  KeyRound, Mail, PlayCircle, Radio, RefreshCw, Server, ShieldCheck, Sparkles, TicketCheck,
+  Activity, ArrowLeft, ArrowRight, Bot, Check, ChevronRight, MessageSquareText, ShieldCheck, UserRound,
+  KeyRound, Mail, PlayCircle, RefreshCw, Server, Sparkles, TicketCheck,
   TriangleAlert,
 } from 'lucide-react';
 import { UserAccountMenu } from './Dashboards.jsx';
@@ -18,6 +18,52 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function formatRunDuration(run) {
+  const startedAt = Date.parse(run.started_at || '');
+  if (Number.isNaN(startedAt)) return '—';
+  const finishedAt = Date.parse(run.completed_at || '');
+  const elapsedSeconds = Math.max(0, Math.floor(((Number.isNaN(finishedAt) ? Date.now() : finishedAt) - startedAt) / 1000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function WorkflowIcon({ type }) {
+  if (type === 'outlook') return <svg viewBox="0 0 32 32" role="img" aria-label="Microsoft Outlook"><path d="M12 6h16a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H12z" fill="#1687d9"/><path d="M12 9h15v14H12z" fill="#35a7e8"/><path d="m12 10 7.5 6L27 10" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round"/><rect x="2" y="8" width="14" height="17" rx="3" fill="#07549b"/><path d="M5.2 16.5c0-3.2 1.7-5.2 4.4-5.2s4.4 2 4.4 5.2-1.7 5.2-4.4 5.2-4.4-2-4.4-5.2Zm2.4 0c0 1.9.7 3 2 3s2-1.1 2-3-.7-3-2-3-2 1.1-2 3Z" fill="#fff"/></svg>;
+  if (type === 'jira') return <svg viewBox="0 0 32 32" role="img" aria-label="Jira"><path d="M16 2.5 29.5 16 16 29.5 2.5 16 16 2.5Z" fill="#2684ff"/><path d="m16 9 7 7-7 7-7-7 7-7Z" fill="#fff"/><path d="m16 12 4 4-4 4-4-4 4-4Z" fill="#2684ff"/></svg>;
+  if (type === 'reporter') return <UserRound size={22} strokeWidth={1.9} />;
+  if (type === 'ai') return <Sparkles size={22} strokeWidth={1.9} />;
+  if (type === 'validation') return <ShieldCheck size={22} strokeWidth={1.9} />;
+  if (type === 'notification') return <MessageSquareText size={22} strokeWidth={1.9} />;
+  return <TicketCheck size={22} strokeWidth={1.9} />;
+}
+
+function AgentWorkflow() {
+  const stages = [
+    { key: 'reporter', title: 'Reporter', caption: 'Reports an issue', icon: 'reporter' },
+    { key: 'outlook', title: 'Outlook', caption: 'Receives the email', icon: 'outlook' },
+    { key: 'ai', title: 'AI agent', caption: 'Extracts intent & context', icon: 'ai' },
+    { key: 'validation', title: 'Validation', caption: 'Checks for duplicates', icon: 'validation' },
+    { key: 'jira', title: 'Jira', caption: 'Creates the ticket', icon: 'jira' },
+    { key: 'notification', title: 'Notification', caption: 'Notifies the team', icon: 'notification' },
+  ];
+  return <section className="agent-workflow-panel" aria-labelledby="agent-workflow-title">
+    <div className="agent-workflow-heading"><div><h2 id="agent-workflow-title">Agent workflow</h2><p>From an incoming incident report to a Jira ticket and team notification</p></div></div>
+    <div className="agent-workflow-scroll">
+      <ol className="agent-workflow-dag" aria-label="Incident report workflow">
+        {stages.map((stage, index) => <li className={`agent-workflow-stage is-${stage.key}`} key={stage.key}>
+          <div className="agent-workflow-node">
+            <span className={`agent-workflow-icon is-${stage.key}`}><WorkflowIcon type={stage.icon} /></span>
+            <strong>{stage.title}</strong><small>{stage.caption}</small>
+          </div>
+          {index < stages.length - 1 && <span className="agent-workflow-link" aria-hidden="true" />}
+        </li>)}
+      </ol>
+    </div>
+  </section>;
 }
 
 export function AgentCatalog({ currentUser, onLogin, onLogout, onOpenIncident, onOpenHowItWorks }) {
@@ -38,7 +84,7 @@ export function AgentCatalog({ currentUser, onLogin, onLogout, onOpenIncident, o
           <button className="agent-catalog-card is-available" type="button" onClick={onOpenIncident}>
             <span className="agent-catalog-icon"><Bot size={23} /></span>
             <span className="agent-catalog-card-content">
-              <span className="agent-catalog-card-title">Incident Management Agent <span className="agent-catalog-status">Available</span></span>
+              <span className="agent-catalog-card-title">Incident Management Agent</span>
               <span className="agent-catalog-description">Reviews new Outlook email, extracts incident context, checks for duplicates, and creates Jira tickets.</span>
               <span className="agent-catalog-flow">Outlook <ArrowRight size={14} /> AI analysis <ArrowRight size={14} /> Jira</span>
             </span>
@@ -73,7 +119,6 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
   const [triggering, setTriggering] = useState(false);
   const [pendingExecution, setPendingExecution] = useState(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState('');
-  const [selectedEventId, setSelectedEventId] = useState('');
 
   async function refreshAgentStatus() {
     try {
@@ -94,14 +139,14 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
     setTriggering(true);
     setCheckError('');
     setCheckMessage('Agent run started. Checking the inbox window…');
-    setPendingExecution({ id: provisionalId, status: 'running', started_at: startedAt, current_step: 'Connecting to Outlook and Jira', emails_found: 0, tickets_created: 0, event_ids: [], provisional: true });
+    setPendingExecution({ id: provisionalId, status: 'running', started_at: startedAt, active_stage: 'email', current_step: 'Checking Outlook inbox', emails_found: 0, tickets_created: 0, event_ids: [], provisional: true });
     try {
       const response = await fetch('/api/agent-workspace/check-inbox', { method: 'POST' });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'The inbox check could not complete.');
       const windowText = result.window_start && result.window_end ? ` Window ${formatDateTime(result.window_start)}–${formatDateTime(result.window_end)}.` : '';
       setCheckMessage(`${result.message || 'Inbox check complete.'}${windowText}`);
-      setPendingExecution((current) => current ? { ...current, id: result.id || current.id, provisional: false, status: result.status === 'partial' ? 'partially_completed' : result.status === 'failed' ? 'failed' : 'completed', window_start: result.window_start, window_end: result.window_end, completed_at: result.window_end || new Date().toISOString(), emails_found: result.emails_found || 0, emails_processed: result.emails_processed || 0, emails_skipped: result.emails_skipped || 0, tickets_created: result.tickets_created || 0, duplicates_grouped: result.duplicates_grouped || 0, failures: result.failures || 0, message: result.message || '' } : current);
+      setPendingExecution((current) => current ? { ...current, id: result.id || current.id, provisional: false, status: result.status === 'partial' ? 'partially_completed' : result.status === 'failed' ? 'failed' : result.status === 'running' ? 'running' : 'completed', window_start: result.window_start, window_end: result.window_end, completed_at: result.status === 'running' ? null : result.window_end || new Date().toISOString(), emails_found: result.emails_found || 0, emails_processed: result.emails_processed || 0, emails_skipped: result.emails_skipped || 0, tickets_created: result.tickets_created || 0, duplicates_grouped: result.duplicates_grouped || 0, failures: result.failures || 0, message: result.message || '' } : current);
       await refreshAgentStatus();
     } catch (error) {
       setCheckError(error.message || 'The inbox check could not complete.');
@@ -109,7 +154,9 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
       setPendingExecution((current) => current ? { ...current, provisional: false, status: 'failed', completed_at: new Date().toISOString(), current_step: 'Run failed', message: error.message || 'The inbox check could not complete.', failures: 1 } : current);
       const latestStatus = await refreshAgentStatus();
       const failedRunId = latestStatus?.last_run_result?.id;
-      if (failedRunId) setPendingExecution((current) => current ? { ...current, id: failedRunId } : current);
+      if (failedRunId) {
+        setPendingExecution((current) => current ? { ...current, id: failedRunId } : current);
+      }
     }
     setTriggering(false);
   }
@@ -155,9 +202,14 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
   }
 
   useEffect(() => {
-    refreshAgentStatus();
-    const timer = window.setInterval(refreshAgentStatus, 2000);
-    return () => window.clearInterval(timer);
+    let active = true;
+    let timer;
+    const pollStatus = async () => {
+      await refreshAgentStatus();
+      if (active) timer = window.setTimeout(pollStatus, 700);
+    };
+    pollStatus();
+    return () => { active = false; window.clearTimeout(timer); };
   }, []);
 
   useEffect(() => {
@@ -204,7 +256,8 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
 
   useEffect(() => {
     if (pendingExecution?.provisional && agent?.current_run?.id) {
-      setPendingExecution((current) => current ? { ...current, id: agent.current_run.id, provisional: false, current_step: agent.current_run.current_step || current.current_step } : current);
+      const runId = agent.current_run.id;
+      setPendingExecution((current) => current ? { ...current, id: runId, provisional: false, active_stage: agent.current_run.active_stage || current.active_stage, current_step: agent.current_run.current_step || current.current_step } : current);
     }
   }, [agent, pendingExecution]);
 
@@ -220,19 +273,33 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
   }, [checkMessage, checkError]);
 
   const events = agent?.events || [];
-  const checkRunning = triggering || agent?.monitor_status === 'checking';
-  const executions = (agent?.executions || []).map((run) => ({
-    ...run,
-    messages: events.filter((event) => eventBelongsToRun(event, run)),
-  }));
+  const checkRunning = triggering
+    || agent?.monitor_status === 'checking'
+    || Boolean(agent?.current_run?.id)
+    || (agent?.executions || []).some((run) => run.status === 'running');
+  const executions = (agent?.executions || []).map((run) => {
+    const messages = events.filter((event) => eventBelongsToRun(event, run));
+    const notificationPending = messages.some((event) => ['active', 'waiting'].includes(event.steps?.find((step) => step.key === 'notify')?.status));
+    return {
+      ...run,
+      messages,
+      notification_pending: notificationPending,
+      active_stage: notificationPending ? 'notify' : run.active_stage,
+      current_step: notificationPending ? 'Waiting for notification delivery confirmation' : run.current_step,
+      status: notificationPending && ['completed', 'complete'].includes(run.status) ? 'running' : run.status,
+    };
+  });
   // Older backend processes retained the last run summary and email events but
   // did not persist execution records or event run_ids. Reconstruct that one
   // run from its saved time window so the actual message details remain visible.
   const lastRun = agent?.last_run_result;
   if (lastRun?.id && !executions.some((run) => run.id === lastRun.id)) {
+    const recoveredMessages = events.filter((event) => eventBelongsToRun(event, lastRun));
+    const recoveredNotificationPending = recoveredMessages.some((event) => ['active', 'waiting'].includes(event.steps?.find((step) => step.key === 'notify')?.status));
     const recoveredRun = {
       ...lastRun,
-      status: lastRun.status === 'failed' ? 'failed' : lastRun.status === 'partial' ? 'partially_completed' : 'completed',
+      status: lastRun.status === 'failed' ? 'failed' : lastRun.status === 'partial' ? 'partially_completed' : recoveredNotificationPending ? 'running' : 'completed',
+      active_stage: recoveredNotificationPending ? 'notify' : 'complete',
       window_start: lastRun.window_start,
       window_end: lastRun.window_end,
       completed_at: lastRun.window_end || agent?.last_run_at,
@@ -242,20 +309,19 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
       tickets_created: lastRun.tickets_created || 0,
       duplicates_grouped: lastRun.duplicates_grouped || 0,
       failures: lastRun.failures || 0,
-      messages: events.filter((event) => eventBelongsToRun(event, lastRun)),
+      messages: recoveredMessages,
       recovered: true,
     };
     executions.unshift(recoveredRun);
   }
   if (pendingExecution && !executions.some((run) => run.id === pendingExecution.id)) executions.unshift({ ...pendingExecution, messages: [] });
   const selectedExecution = executions.find((run) => run.id === selectedExecutionId);
-  const selectedEvent = selectedExecution?.messages?.find((event) => event.id === selectedEventId);
-  const actualExecutions = executions;
-  const completedRuns = actualExecutions.filter((run) => ['completed', 'complete'].includes(run.status)).length;
-  const failedRuns = actualExecutions.filter((run) => run.status === 'failed').length;
-  const historicalEmails = agent?.counts?.emails ?? events.length;
-  const historicalTickets = agent?.counts?.tickets ?? events.filter((event) => event.status === 'created').length;
-  const healthy = Boolean(connectionResults.outlook?.connected && connectionResults.jira?.connected);
+  const visibleExecutions = executions.slice(0, 10);
+  const connectionNotice = outlookAuthError
+    || (['error', 'expired'].includes(outlookAuth?.status) ? outlookAuth?.message : '')
+    || (!connectionResults.outlook?.connected ? connectionResults.outlook?.message : '')
+    || (!connectionResults.jira?.connected ? connectionResults.jira?.message : '')
+    || configurationError;
 
   return (
     <section className="dashboard-page agent-workspace-page agent-operations-page">
@@ -269,67 +335,46 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
             <h1>Incident Management Agent</h1>
             <p>Automated email triage and incident orchestration</p>
           </div>
-          <span className={`agent-live-badge${healthy ? ' is-live' : agent?.monitor_status === 'error' ? ' has-error' : ''}`}><i />{healthy ? 'Healthy' : checkRunning ? 'Running' : 'Needs connection'}</span>
+          <button className="agent-trigger-button agent-header-trigger-button" type="button" onClick={checkInboxNow} disabled={checkRunning}>
+            <PlayCircle size={15} />Trigger Agent
+          </button>
         </header>
 
-        <section className="agent-overview-card agent-operations-control" aria-label="Agent controls and integration health">
-          <div className="agent-operations-identity">
-            <span className="agent-overview-icon"><Activity size={22} /></span>
-            <div className="agent-overview-copy">
-              <div className="agent-overview-title"><h2>Email-to-Jira Automation</h2><span className="agent-monitoring-tag"><Radio size={12} /> ON DEMAND</span></div>
-              <p><span>Outlook</span><ArrowRight size={14} /><span>AI Intelligence</span><ArrowRight size={14} /><span>Jira</span><ArrowRight size={14} /><span>Notification</span></p>
-            </div>
-          </div>
-          <div className="agent-operations-controls">
-            <div className="agent-health-strip">
-              <span className={`agent-health-item${connectionResults.outlook?.connected ? ' is-healthy' : ''}`}><Mail size={14} /> Outlook <i>{connectionResults.outlook?.connected ? 'Connected' : configuration?.outlook?.configured ? 'Checking' : 'Not configured'}</i>
-                <button type="button" onClick={connectionResults.outlook?.connected ? () => testConnection('outlook') : connectOutlook} disabled={startingOutlookAuth || outlookAuth?.status === 'pending' || testingProvider === 'outlook'}>{connectionResults.outlook?.connected ? 'Check' : 'Connect'}</button>
-              </span>
-              <span className={`agent-health-item${connectionResults.jira?.connected ? ' is-healthy' : ''}`}><TicketCheck size={14} /> Jira <i>{connectionResults.jira?.connected ? `Connected · ${agent?.jira_project_key || 'Project'}` : configuration?.jira?.configured ? 'Checking' : 'Not configured'}</i>
-                <button type="button" onClick={() => testConnection('jira')} disabled={!configuration?.jira?.configured || testingProvider === 'jira'}>{testingProvider === 'jira' ? '…' : 'Check'}</button>
-              </span>
-              <button className="agent-health-refresh" type="button" onClick={() => { testConnection('outlook'); testConnection('jira'); }} aria-label="Refresh integration health" disabled={Boolean(testingProvider)}><RefreshCw size={14} className={testingProvider ? 'is-spinning' : ''} /></button>
-            </div>
-            {outlookAuth?.status === 'pending' && <div className="agent-outlook-auth-card" role="status"><span className="agent-outlook-auth-icon"><KeyRound size={14} /></span><div><strong>Finish one-time Microsoft sign-in</strong><p>Open <a href={outlookAuth.verification_uri} target="_blank" rel="noreferrer">Microsoft sign-in</a> and enter this code:</p><code>{outlookAuth.user_code}</code><small>Keep this page open. After approval, this device saves the encrypted sign-in for future runs.</small></div></div>}
-            {(outlookAuthError || outlookAuth?.status === 'error' || outlookAuth?.status === 'expired' || connectionResults.outlook?.message || connectionResults.jira?.message || configurationError) && <div className="agent-connection-notices" role="status">{outlookAuthError || outlookAuth?.message || connectionResults.outlook?.message || connectionResults.jira?.message || configurationError}</div>}
-            <button className="agent-trigger-button" type="button" onClick={checkInboxNow} disabled={checkRunning}>
-              {checkRunning ? <span className="agent-spinner" /> : <PlayCircle size={18} />}{checkRunning ? 'Running…' : 'Trigger Agent'}
-            </button>
-          </div>
-        </section>
-
-        <section className="agent-run-metrics" aria-label="Execution metrics">
-          <Metric label="Total runs" value={actualExecutions.length} />
-          <Metric label="Completed" value={completedRuns} />
-          <Metric label="Failed" value={failedRuns} failed />
-        </section>
-        <section className="agent-history-metrics" aria-label="Historical processing totals">
-          <span><Mail size={14} /> Historical emails <strong>{historicalEmails}</strong></span>
-          <span><TicketCheck size={14} /> Jira tickets created <strong>{historicalTickets}</strong></span>
-          <span><ShieldCheck size={14} /> Duplicates grouped <strong>{agent?.counts?.duplicates ?? 0}</strong></span>
-          <span className="agent-last-run">Last run {formatTime(agent?.last_run_at)}</span>
-        </section>
+        <AgentWorkflow />
 
         <section className="agent-execution-history" aria-labelledby="execution-history-title">
-          <div className="agent-history-heading"><div><h2 id="execution-history-title">Execution history</h2><p>Recent agent runs · select a run to inspect its messages and workflow</p></div><span>{actualExecutions.length} {actualExecutions.length === 1 ? 'run' : 'runs'}</span></div>
-          {executions.length ? <div className="agent-run-list">
-            {executions.map((run) => <button type="button" className={`agent-run-row is-${run.status}`} key={run.id} onClick={() => { setSelectedExecutionId(run.id); setSelectedEventId(''); }}>
-              <span className={`agent-run-indicator${run.status === 'running' ? ' is-running' : ''}`} />
-              <span className="agent-run-main">
-                <span className="agent-run-title"><strong>{run.id}</strong><StatusBadge status={run.status} /></span>
-                <span className="agent-run-summary">{run.current_step || run.message || `${run.emails_found || 0} email(s) detected`}</span>
-                <span className="agent-run-meta">{run.recovered ? `Recovered run · checked ${formatDateTime(run.window_start)}–${formatDateTime(run.window_end)}` : `Started ${formatDateTime(run.started_at)}`} <span>·</span> {run.emails_found || 0} emails <span>·</span> {run.tickets_created || 0} tickets</span>
-              </span>
-              <ChevronRight size={19} />
-            </button>)}
-          </div> : <div className="agent-history-empty"><span><Activity size={20} /></span><strong>No executions yet</strong><p>Trigger the agent to check new email received since the last completed inbox check.</p></div>}
+          <div className="agent-history-heading"><div><h2 id="execution-history-title">Recent Runs</h2><p>Latest agent executions · select a run ID to inspect its workflow</p></div><span>{visibleExecutions.length} {visibleExecutions.length === 1 ? 'run' : 'runs'}</span></div>
+          {visibleExecutions.length ? <div className="agent-run-table-scroll"><table className="agent-run-table" aria-label="Recent agent runs">
+            <thead><tr><th scope="col">Run ID</th><th scope="col">Status</th><th scope="col">Start time</th><th scope="col">End time</th><th scope="col">Duration</th><th scope="col">Emails received</th><th scope="col">Jira tickets</th></tr></thead>
+            <tbody>{visibleExecutions.map((run) => <tr className={`is-${run.status}`} key={run.id}>
+              <td><button className="agent-run-id-link" type="button" onClick={() => setSelectedExecutionId(run.id)}>{run.id}<ChevronRight size={14} /></button></td>
+              <td><StatusBadge status={run.status} /></td>
+              <td>{formatDateTime(run.started_at)}</td>
+              <td>{run.completed_at ? formatDateTime(run.completed_at) : <span className="agent-run-in-progress">In progress</span>}</td>
+              <td>{formatRunDuration(run)}</td>
+              <td>{run.emails_found || 0}</td>
+              <td>{run.tickets_created || 0}</td>
+            </tr>)}</tbody>
+          </table></div> : <div className="agent-history-empty"><span><Activity size={20} /></span><strong>No executions yet</strong><p>Trigger the agent to check new email received since the last completed inbox check.</p></div>}
         </section>
         {checkMessage && !checkRunning && <div className="agent-toast" role="status"><Check size={15} />{checkMessage}</div>}
         {checkError && !checkRunning && <div className="agent-toast is-error" role="alert"><TriangleAlert size={15} />{checkError}</div>}
+        <footer className="agent-integration-footer" aria-label="Integration status and checks">
+          <div className="agent-health-strip">
+            <span className={`agent-health-item${connectionResults.outlook?.connected ? ' is-healthy' : ''}`}><Mail size={14} /> Outlook <i>{connectionResults.outlook?.connected ? 'Connected' : configuration?.outlook?.configured ? 'Checking' : 'Not configured'}</i>
+              <button type="button" onClick={connectionResults.outlook?.connected ? () => testConnection('outlook') : connectOutlook} disabled={startingOutlookAuth || outlookAuth?.status === 'pending' || testingProvider === 'outlook'}>{connectionResults.outlook?.connected ? 'Check' : 'Connect'}</button>
+            </span>
+            <span className={`agent-health-item${connectionResults.jira?.connected ? ' is-healthy' : ''}`}><TicketCheck size={14} /> Jira <i>{connectionResults.jira?.connected ? `Connected · ${agent?.jira_project_key || 'Project'}` : configuration?.jira?.configured ? 'Checking' : 'Not configured'}</i>
+              <button type="button" onClick={() => testConnection('jira')} disabled={!configuration?.jira?.configured || testingProvider === 'jira'}>{testingProvider === 'jira' ? '…' : 'Check'}</button>
+            </span>
+            <button className="agent-health-refresh" type="button" onClick={() => { testConnection('outlook'); testConnection('jira'); }} aria-label="Refresh integration health" disabled={Boolean(testingProvider)}><RefreshCw size={14} className={testingProvider ? 'is-spinning' : ''} /></button>
+          </div>
+          {outlookAuth?.status === 'pending' && <div className="agent-outlook-auth-card" role="status"><span className="agent-outlook-auth-icon"><KeyRound size={14} /></span><div><strong>Finish one-time Microsoft sign-in</strong><p>Open <a href={outlookAuth.verification_uri} target="_blank" rel="noreferrer">Microsoft sign-in</a> and enter this code:</p><code>{outlookAuth.user_code}</code><small>Keep this page open. After approval, this device saves the encrypted sign-in for future runs.</small></div></div>}
+          {connectionNotice && <div className="agent-connection-notices" role="status">{connectionNotice}</div>}
+        </footer>
       </div>
 
-      {selectedEvent ? <MessageExecutionDetail event={selectedEvent} run={selectedExecution} onBack={() => setSelectedEventId('')} />
-        : selectedExecution ? <RunExecutionDetail run={selectedExecution} onBack={() => setSelectedExecutionId('')} onSelectEvent={setSelectedEventId} /> : null}
+      {selectedExecution ? <RunExecutionDetail run={selectedExecution} onBack={() => setSelectedExecutionId('')} /> : null}
     </section>
   );
 }
@@ -359,101 +404,108 @@ function affectedEntities(event) {
 }
 
 function StatusBadge({ status }) {
-  const labels = { running: 'Running', completed: 'Completed', complete: 'Completed', partially_completed: 'Partially completed', partial: 'Partially completed', failed: 'Failed', skipped: 'Not enabled', waiting: 'Pending' };
+  const labels = { running: 'Running', active: 'Processing…', completed: 'Success', complete: 'Success', partially_completed: 'Partially completed', partial: 'Partially completed', failed: 'Failure', skipped: 'Not sent', waiting: 'Pending' };
   return <span className={`agent-status-badge is-${status || 'running'}`}>{labels[status] || status || 'Running'}</span>;
 }
 
-function RunExecutionDetail({ run, onBack, onSelectEvent }) {
+function RunExecutionDetail({ run, onBack }) {
   const messages = run.messages || [];
   const runActive = run.status === 'running';
   const complete = ['completed', 'complete'].includes(run.status);
-  const [expanded, setExpanded] = useState(() => new Set(['email', 'intent', 'duplicate', 'jira', 'notify', 'complete']));
+  const noNewEmails = !messages.length && Number(run.emails_found || 0) === 0;
+  const noMessageSuccess = complete && !messages.length && Number(run.failures || 0) === 0;
+  const [expanded, setExpanded] = useState(() => new Set());
   const allExpanded = expanded.size === 6;
   const toggleAll = () => setExpanded(allExpanded ? new Set() : new Set(['email', 'intent', 'duplicate', 'jira', 'notify', 'complete']));
+  const stageOrder = ['email', 'intent', 'duplicate', 'jira', 'notify', 'complete'];
+  const currentStep = String(run.current_step || '').toLowerCase();
+  const activeStage = stageOrder.includes(run.active_stage) ? run.active_stage
+    : /notification|delivery confirmation/.test(currentStep) ? 'notify'
+      : /creating jira|jira ticket/.test(currentStep) ? 'jira'
+        : /duplicate|matching incident/.test(currentStep) ? 'duplicate'
+          : /analyz|intent|context/.test(currentStep) ? 'intent' : 'email';
   const stageState = (key) => {
     const statuses = messages.map((event) => event.steps?.find((step) => step.key === key)?.status).filter(Boolean);
-    if (key === 'email') return messages.length || complete ? 'complete' : runActive ? 'active' : 'waiting';
-    if (key === 'intent') return statuses.includes('failed') ? 'failed' : statuses.length && statuses.every((status) => status === 'complete') ? 'complete' : runActive ? 'active' : 'waiting';
-    if (key === 'duplicate') return statuses.includes('failed') ? 'failed' : statuses.some((status) => ['complete', 'duplicate', 'skipped'].includes(status)) ? 'complete' : runActive ? 'active' : 'waiting';
-    if (key === 'jira') return messages.some((event) => event.jira_key) ? 'complete' : statuses.includes('failed') ? 'failed' : runActive && /jira|ticket/i.test(run.current_step || '') ? 'active' : 'waiting';
-    if (key === 'notify') return statuses.length && statuses.every((status) => status === 'skipped') ? 'skipped' : statuses.includes('complete') ? 'complete' : runActive ? 'active' : 'skipped';
-    return run.status === 'failed' ? 'failed' : run.status === 'partially_completed' ? 'partial' : runActive ? 'active' : complete ? 'complete' : 'waiting';
+    if (noMessageSuccess && key !== 'complete') return 'complete';
+    if (runActive) {
+      const stageIndex = stageOrder.indexOf(key);
+      const activeIndex = stageOrder.indexOf(activeStage);
+      if (stageIndex < activeIndex) return statuses.includes('failed') ? 'failed' : 'complete';
+      if (stageIndex > activeIndex) return 'waiting';
+      if (statuses.includes('active')) return 'active';
+      if (statuses.includes('failed')) return 'failed';
+      return 'active';
+    }
+    if (key === 'complete') {
+      const notificationStatuses = messages.map((event) => event.steps?.find((step) => step.key === 'notify')?.status).filter(Boolean);
+      if (run.status === 'failed') return 'failed';
+      if (run.status === 'partially_completed') return 'partial';
+      if (notificationStatuses.some((status) => ['active', 'waiting'].includes(status))) return 'waiting';
+      return complete ? 'complete' : 'waiting';
+    }
+    if (statuses.includes('failed') || run.status === 'failed') return 'failed';
+    if (key === 'email') return complete || statuses.includes('complete') ? 'complete' : 'waiting';
+    if (key === 'intent') return statuses.includes('complete') ? 'complete' : complete ? 'complete' : 'waiting';
+    if (key === 'duplicate') return statuses.some((status) => ['complete', 'duplicate', 'skipped'].includes(status)) || complete ? 'complete' : 'waiting';
+    if (key === 'jira') return messages.some((event) => event.jira_key) || statuses.some((status) => ['complete', 'duplicate', 'skipped'].includes(status)) || complete ? 'complete' : 'waiting';
+    if (key === 'notify') return statuses.includes('complete') ? 'complete' : statuses.every((status) => status === 'skipped') && statuses.length ? 'skipped' : complete ? 'complete' : 'waiting';
+    return complete ? 'complete' : 'waiting';
   };
   const stages = [
-    { key: 'email', title: 'Email received', caption: 'Outlook messages retrieved', timeKey: 'email' },
-    { key: 'intent', title: 'Intent & context extraction', caption: 'AI analyzed each message and prepared incident context', timeKey: 'intent' },
-    { key: 'duplicate', title: 'Duplicate validation', caption: 'Checked for matching incidents before creating Jira issues', timeKey: 'duplicate' },
-    { key: 'jira', title: 'Jira ticket creation', caption: 'Created tickets and linked results to their source emails', timeKey: 'jira' },
-    { key: 'notify', title: 'Requester notification', caption: 'Notification status for this run', timeKey: 'notify' },
-    { key: 'complete', title: 'Run completed', caption: run.message || (run.completed_at ? `Finished at ${formatDateTime(run.completed_at)}` : run.current_step || 'Waiting for agent progress') },
+    { key: 'email', title: 'Email received', caption: noMessageSuccess ? Number(run.emails_found || 0) === 0 ? 'Inbox checked · no new emails detected' : 'No new messages needed processing' : stageState('email') === 'active' ? 'Checking Outlook for new messages' : 'Outlook messages retrieved', timeKey: 'email' },
+    { key: 'intent', title: 'Intent & context extraction', caption: noNewEmails ? 'No email to analyze' : noMessageSuccess ? 'No message required analysis' : stageState('intent') === 'active' ? 'Extracting intent and incident context' : 'AI analyzed each message and prepared incident context', timeKey: 'intent' },
+    { key: 'duplicate', title: 'Duplicate validation', caption: noNewEmails ? 'No incident to compare' : noMessageSuccess ? 'No incident required comparison' : stageState('duplicate') === 'active' ? 'Checking for matching incidents' : 'Checked for matching incidents before creating Jira issues', timeKey: 'duplicate' },
+    { key: 'jira', title: 'Jira ticket creation', caption: noNewEmails ? 'No Jira ticket required' : noMessageSuccess ? 'No ticket needed for this run' : stageState('jira') === 'active' ? 'Creating Jira tickets' : 'Created tickets and linked results to their source emails', timeKey: 'jira' },
+    { key: 'notify', title: 'Requester notification', caption: noNewEmails ? 'No notification required' : noMessageSuccess ? 'No notification needed' : stageState('notify') === 'active' ? 'Waiting for delivery confirmation in Outlook' : 'Notification delivery status', timeKey: 'notify' },
+    { key: 'complete', title: 'Run completed', caption: runActive ? /notification|delivery confirmation/i.test(run.current_step || '') ? 'Waiting for requester notification confirmation' : 'Waiting for earlier steps to finish' : run.status === 'failed' ? 'Run failed' : complete ? 'Completed successfully' : 'Run partially completed' },
   ];
+  const realStageStates = stages.map((stage) => stageState(stage.key));
+  const activeStageIndex = realStageStates.findIndex((status) => ['active', 'waiting'].includes(status));
+  const completedStageCount = realStageStates.filter((status) => ['complete', 'duplicate', 'skipped'].includes(status)).length;
+  const progressWidth = activeStageIndex >= 0 ? ((completedStageCount + 0.48) / stages.length) * 100 : complete ? 100 : 8;
   const stageTime = (stage) => {
     if (stage.key === 'complete') return run.completed_at ? formatTime(run.completed_at) : '';
     const times = messages.flatMap((event) => (event.steps || []).filter((step) => step.key === stage.timeKey && step.at).map((step) => step.at));
-    return times.length ? formatTime(times.at(-1)) : stage.key === 'email' ? formatTime(run.started_at) : '';
+    return times.length ? formatTime(times.at(-1)) : run.stage_times?.[stage.key] ? formatTime(run.stage_times[stage.key]) : stage.key === 'email' ? formatTime(run.started_at) : '';
   };
   const toggleStage = (key) => setExpanded((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   const renderStageContent = (key) => {
-    if (key === 'complete') return <div className="agent-run-completion-details"><p>{run.message || (complete ? 'The run finished.' : run.current_step || 'The run is still in progress.')}</p><div className="agent-run-completion-counts"><span>{run.emails_found || 0} emails detected</span><span>{run.tickets_created || 0} tickets created</span><span>{run.duplicates_grouped || 0} duplicates grouped</span><span>{run.failures || 0} failures</span></div></div>;
-    if (!messages.length) return <p className="agent-stage-empty">{runActive ? 'Waiting for email activity…' : 'No message details were retained for this run.'}</p>;
+    if (key === 'complete') {
+      const emails = run.emails_found || 0;
+      const tickets = run.tickets_created || 0;
+      const duplicates = run.duplicates_grouped || 0;
+      const failures = run.failures || 0;
+      return <div className="agent-run-completion-details"><div className="agent-run-completion-counts"><span>{emails} {emails === 1 ? 'email' : 'emails'} detected</span><span>{tickets} {tickets === 1 ? 'ticket' : 'tickets'} created</span><span>{duplicates} {duplicates === 1 ? 'duplicate' : 'duplicates'} grouped</span><span>{failures} {failures === 1 ? 'failure' : 'failures'}</span></div></div>;
+    }
+    if (!messages.length) return <p className="agent-stage-empty">{noMessageSuccess ? ({ email: Number(run.emails_found || 0) === 0 ? 'The inbox check completed successfully and found no new email.' : 'No new email required processing.', intent: 'No email was detected, so intent and context extraction were not needed.', duplicate: 'No incident was detected, so duplicate validation was not needed.', jira: 'No email required a Jira ticket.', notify: 'No Jira ticket was created, so no requester notification was needed.' }[key] || 'The run completed successfully with no new email.') : runActive && noNewEmails && activeStage !== 'email' ? 'No new email was detected; this stage is completing as a successful no-op.' : runActive ? 'Waiting for email activity…' : 'No message details were retained for this run.'}</p>;
     return <div className="agent-stage-message-list">{messages.map((event) => <article className="agent-stage-message" key={`${key}-${event.id}`}>
-      <div className="agent-stage-message-heading"><strong>{event.subject}</strong><button type="button" onClick={() => onSelectEvent(event.id)}>Open message timeline <ArrowRight size={12} /></button></div>
+      <div className="agent-stage-message-heading"><strong>{event.subject}</strong></div>
       {key === 'email' && <dl className="agent-detail-fields"><dt>Received</dt><dd>{formatDateTime(event.received_at)}</dd><dt>From</dt><dd>{event.sender || 'Unknown sender'}</dd><dt>Message</dt><dd>{event.body_preview || 'Email retrieved; message preview is unavailable.'}</dd></dl>}
       {key === 'intent' && <dl className="agent-detail-fields"><dt>Intent</dt><dd>{event.intent || 'Not classified'}</dd><dt>Category</dt><dd>{event.category || event.intent || 'Not classified'}</dd><dt>Priority</dt><dd>{event.priority || 'Medium'}</dd><dt>Financial impact</dt><dd>{event.financial_impact || financialImpact(event)}</dd><dt>Affected agencies</dt><dd>{event.affected_entities || affectedEntities(event)}</dd><dt>Ticket summary</dt><dd>{event.summary || 'Not available'}</dd><dt>Context</dt><dd>{event.description || 'No extracted description available.'}</dd></dl>}
       {key === 'duplicate' && <dl className="agent-detail-fields"><dt>Result</dt><dd>{event.status === 'duplicate' ? 'Matching incident found or grouped with another email in this run.' : event.steps?.find((step) => step.key === 'duplicate')?.status === 'skipped' ? 'Duplicate check bypassed for this POC report.' : event.steps?.find((step) => step.key === 'duplicate')?.detail || 'No matching incident found.'}</dd><dt>Decision</dt><dd>{event.status === 'duplicate' ? `Use existing Jira issue${event.jira_key ? ` ${event.jira_key}` : ''}.` : event.status === 'created' ? 'Create one new Jira issue.' : 'Pending validation.'}</dd></dl>}
       {key === 'jira' && <dl className="agent-detail-fields"><dt>Ticket</dt><dd>{event.jira_key || (event.status === 'failed' ? 'Creation failed' : 'No ticket created')}</dd><dt>Summary</dt><dd>{event.summary || 'Not available'}</dd><dt>Priority</dt><dd>{event.priority || 'Medium'}</dd><dt>Assignee</dt><dd>{event.assignee || 'Unassigned'}</dd><dt>Description</dt><dd>{event.description || 'Not available'}</dd>{event.jira_project_key && <><dt>Project</dt><dd>{event.jira_project_key}</dd></>}{event.jira_url && <><dt>Jira link</dt><dd><a className="agent-inline-jira-link" href={event.jira_url} target="_blank" rel="noreferrer">Open {event.jira_key} <ArrowRight size={12} /></a></dd></>}</dl>}
-      {key === 'notify' && <div className="agent-notification-state"><StatusBadge status={event.steps?.find((step) => step.key === 'notify')?.status || 'skipped'} /><span>{event.steps?.find((step) => step.key === 'notify')?.detail || 'Requester acknowledgement is not enabled; no email was sent.'}</span></div>}
+      {key === 'notify' && <div className="agent-notification-state"><StatusBadge status={event.steps?.find((step) => step.key === 'notify')?.status || 'skipped'} /><span>{(event.steps?.find((step) => step.key === 'notify')?.detail || 'Requester acknowledgement is not enabled; no email was sent.').replace(/ · Delivery confirmed in Outlook (?:Junk Email|Inbox)/, ' · Delivery confirmed')}</span></div>}
     </article>)}</div>;
   };
   return <div className="agent-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="agent-run-detail-title">
     <div className="agent-detail-shell">
-      <header className="agent-detail-topbar"><button type="button" onClick={onBack}><ArrowLeft size={15} /> Execution history</button><span>Execution details</span></header>
+      <header className="agent-detail-topbar"><button type="button" onClick={onBack}><ArrowLeft size={15} /> Execution history</button></header>
       <div className="agent-detail-content">
-        <div className="agent-detail-heading"><div><div className="agent-detail-kicker">{run.legacy ? 'Earlier activity' : run.recovered ? `${run.id} · restored from saved run summary` : run.id}</div><h2 id="agent-run-detail-title">{messages[0]?.subject || (run.legacy ? 'Existing processed email activity' : 'Agent execution')}</h2><p>{run.recovered ? `Checked window ${formatDateTime(run.window_start)}–${formatDateTime(run.window_end)}` : `Started ${formatDateTime(run.started_at)}${run.completed_at ? ` · Finished ${formatDateTime(run.completed_at)}` : ' · In progress'}`}</p></div><StatusBadge status={run.status} /></div>
-        <div className="agent-detail-progress"><span style={{ width: `${runActive ? 56 : run.status === 'failed' ? 100 : 100}%` }} /></div>
+        <div className="agent-detail-heading"><div><h2 id="agent-run-detail-title">Execution Details</h2><p className="agent-detail-meta">{run.id} · Started {formatDateTime(run.started_at)}{run.completed_at ? ` · Finished ${formatDateTime(run.completed_at)}` : ' · In progress'}</p></div><StatusBadge status={run.status} /></div>
+        <div className="agent-detail-progress"><span style={{ width: `${progressWidth}%` }} /></div>
         <div className="agent-detail-stats"><Metric label="Emails detected" value={run.emails_found || 0} /><Metric label="Processed" value={run.emails_processed || 0} /><Metric label="Skipped" value={run.emails_skipped || 0} /><Metric label="Tickets created" value={run.tickets_created || 0} /><Metric label="Duplicates grouped" value={run.duplicates_grouped || 0} /><Metric label="Failed" value={run.failures || 0} failed={Boolean(run.failures)} /></div>
-        <section className="agent-detail-section"><div className="agent-detail-section-heading"><div><h3>Execution timeline</h3><p>Expand a stage to inspect email, analysis, duplicate, Jira, and notification details.</p></div><div className="agent-timeline-heading-actions">{runActive && <span className="agent-running-label"><i /> Live</span>}<button className="agent-collapse-all" type="button" onClick={toggleAll}>{allExpanded ? 'Collapse all' : 'Expand all'}</button></div></div>
-          <ol className="agent-vertical-timeline agent-run-timeline">{stages.map((stage) => {
-            const status = stageState(stage.key);
+        <section className="agent-detail-section"><div className="agent-detail-section-heading"><div><h3>Execution timeline</h3><p>Expand a stage to inspect email, analysis, duplicate, Jira, and notification details.</p></div><div className="agent-timeline-heading-actions"><button className="agent-collapse-all" type="button" onClick={toggleAll}>{allExpanded ? 'Collapse all' : 'Expand all'}</button></div></div>
+          <ol className="agent-vertical-timeline agent-run-timeline">{stages.map((stage, index) => {
+            const status = realStageStates[index];
             const isExpanded = expanded.has(stage.key);
-            return <li className={`agent-timeline-step is-${status}${isExpanded ? ' is-expanded' : ''}`} key={stage.key}><span className="agent-timeline-marker">{status === 'complete' ? <Check size={14} /> : status === 'failed' ? <TriangleAlert size={14} /> : status === 'active' ? <span className="agent-spinner" /> : status === 'partial' ? '!' : <span />}</span><div className="agent-timeline-copy"><button className="agent-timeline-toggle" type="button" aria-expanded={isExpanded} onClick={() => toggleStage(stage.key)}><span><strong>{stage.title}</strong><small>{stage.caption}</small></span><span className="agent-timeline-toggle-end"><time>{stageTime(stage)}</time>{status === 'skipped' && <StatusBadge status="skipped" />}<ChevronRight size={15} /></span></button>{isExpanded && <div className="agent-timeline-expanded">{renderStageContent(stage.key)}</div>}</div></li>;
+            const connectorComplete = status === 'complete' || status === 'duplicate';
+            const connectorFlowing = connectorComplete && realStageStates[index + 1] === 'active';
+            return <li className={`agent-timeline-step is-${status}${isExpanded ? ' is-expanded' : ''}`} key={stage.key}>
+              <span className="agent-timeline-marker">{status === 'complete' ? <Check size={14} /> : status === 'failed' ? <TriangleAlert size={14} /> : status === 'active' ? <span className="agent-spinner" /> : status === 'partial' ? '!' : <span />}</span>
+              {index < stages.length - 1 && <span className={`agent-timeline-connector${connectorComplete ? ' is-complete' : ''}${connectorFlowing ? ' is-flowing' : ''}`} aria-hidden="true"><i /></span>}
+              <div className="agent-timeline-copy"><button className="agent-timeline-toggle" type="button" aria-expanded={isExpanded} onClick={() => toggleStage(stage.key)}><span><strong>{stage.title}</strong><small>{stage.caption}</small></span><span className="agent-timeline-toggle-end">{status === 'active' && <span className="agent-processing-label">Processing…</span>}<time>{stageTime(stage)}</time>{status === 'skipped' && <StatusBadge status="skipped" />}<ChevronRight size={15} /></span></button>{isExpanded && <div className="agent-timeline-expanded">{renderStageContent(stage.key)}</div>}</div>
+            </li>;
           })}</ol>
-        </section>
-        <section className="agent-detail-section agent-run-messages"><div className="agent-detail-section-heading"><div><h3>Messages in this run</h3><p>Select a message to inspect its email-to-Jira workflow.</p></div><span>{messages.length} {messages.length === 1 ? 'message' : 'messages'}</span></div>
-          {messages.length ? <div className="agent-message-list">{messages.map((event, index) => <button className="agent-message-row" type="button" key={event.id} onClick={() => onSelectEvent(event.id)}><span className="agent-message-index">{String(index + 1).padStart(2, '0')}</span><span className="agent-message-copy"><strong>{event.subject}</strong><small>{event.jira_key ? `${event.jira_key} · ` : ''}{event.intent || 'Analysis in progress'} · {formatTime(event.received_at)}</small></span><StatusBadge status={event.status === 'created' || event.status === 'duplicate' ? 'completed' : event.status === 'processing' ? 'running' : event.status} /><ChevronRight size={17} /></button>)}</div> : <div className="agent-detail-empty">{runActive ? 'Waiting for messages to be detected and processed…' : 'No message details were retained for this run.'}</div>}
-        </section>
-      </div>
-    </div>
-  </div>;
-}
-
-function MessageExecutionDetail({ event, run, onBack }) {
-  const steps = event.steps || [];
-  const [expanded, setExpanded] = useState(() => new Set(steps.map((step) => step.key)));
-  const allExpanded = expanded.size === steps.length;
-  const toggleAll = () => setExpanded(allExpanded ? new Set() : new Set(steps.map((step) => step.key)));
-  const toggleStep = (key) => setExpanded((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-  const supplemental = (step) => {
-    if (step.key === 'email') return <dl className="agent-detail-fields"><dt>Subject</dt><dd>{event.subject}</dd><dt>From</dt><dd>{event.sender}</dd><dt>Received</dt><dd>{formatDateTime(event.received_at)}</dd>{event.body_preview && <><dt>Message</dt><dd>{event.body_preview}</dd></>}</dl>;
-    if (step.key === 'intent') return <dl className="agent-detail-fields"><dt>Intent</dt><dd>{event.intent || 'Not classified'}</dd><dt>Category</dt><dd>{event.category || event.intent || 'Not classified'}</dd><dt>Priority</dt><dd>{event.priority || 'Medium'}</dd><dt>Financial impact</dt><dd>{event.financial_impact || financialImpact(event)}</dd><dt>Affected agencies</dt><dd>{event.affected_entities || affectedEntities(event)}</dd><dt>Ticket summary</dt><dd>{event.summary || 'Not available'}</dd><dt>Context</dt><dd>{event.description || 'No extracted description available.'}</dd></dl>;
-    if (step.key === 'duplicate') return <dl className="agent-detail-fields"><dt>Result</dt><dd>{event.status === 'duplicate' ? 'Matched or grouped with an existing incident.' : step.status === 'skipped' ? 'Duplicate checks were bypassed for this POC report.' : step.detail || 'No matching incident found.'}</dd><dt>Decision</dt><dd>{event.status === 'duplicate' ? 'Reuse the existing Jira issue.' : event.status === 'created' ? 'Create a new Jira issue.' : 'Pending'}</dd></dl>;
-    if (step.key === 'jira') return <div className="agent-detail-jira">{event.jira_key ? <><div><strong>{event.jira_key}</strong><small>{event.summary} · {event.priority || 'Medium'} · {event.assignee || 'Unassigned'}</small></div><a href={event.jira_url} target="_blank" rel="noreferrer">Open Jira issue <ArrowRight size={13} /></a></> : <span>{step.detail || 'Ticket has not been created.'}</span>}</div>;
-    if (step.key === 'notify') return <div className="agent-notification-state"><StatusBadge status={step.status || 'skipped'} /><span>{step.detail || 'Requester acknowledgement is not enabled; no email was sent.'}</span></div>;
-    return null;
-  };
-  return <div className="agent-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="agent-message-detail-title">
-    <div className="agent-detail-shell">
-      <header className="agent-detail-topbar"><button type="button" onClick={onBack}><ArrowLeft size={15} /> Run {run?.id || ''}</button><span>Message details</span></header>
-      <div className="agent-detail-content agent-message-detail-content">
-        <div className="agent-detail-heading"><div><div className="agent-detail-kicker">{run?.id || 'Execution'} / {event.id}</div><h2 id="agent-message-detail-title">{event.summary || event.subject}</h2><p>{event.sender} · Received {formatDateTime(event.received_at)}</p></div><StatusBadge status={event.status === 'created' || event.status === 'duplicate' ? 'completed' : event.status} /></div>
-        <div className="agent-detail-progress"><span style={{ width: `${steps.length ? (steps.filter((step) => ['complete', 'duplicate', 'skipped'].includes(step.status)).length / steps.length) * 100 : 0}%` }} /></div>
-        <section className="agent-detail-section"><div className="agent-detail-section-heading"><div><h3>Message execution timeline</h3><p>Workflow actions recorded for this email.</p></div><div className="agent-timeline-heading-actions"><span>{steps.filter((step) => ['complete', 'duplicate', 'skipped'].includes(step.status)).length}/{steps.length} steps</span><button className="agent-collapse-all" type="button" onClick={toggleAll}>{allExpanded ? 'Collapse all' : 'Expand all'}</button></div></div>
-          <ol className="agent-vertical-timeline">{steps.map((step) => {
-            const isExpanded = expanded.has(step.key);
-            const status = step.status === 'duplicate' ? 'completed' : step.status;
-            return <li className={`agent-timeline-step is-${step.status}${isExpanded ? ' is-expanded' : ''}`} key={step.key}><span className="agent-timeline-marker">{step.status === 'complete' || step.status === 'duplicate' ? <Check size={14} /> : step.status === 'failed' ? <TriangleAlert size={14} /> : step.status === 'active' ? <span className="agent-spinner" /> : <span />}</span><div className="agent-timeline-copy"><button className="agent-timeline-toggle" type="button" aria-expanded={isExpanded} onClick={() => toggleStep(step.key)}><span><strong>{step.label}</strong><small>{step.detail || (step.status === 'waiting' ? 'Waiting for previous step' : step.status === 'skipped' ? 'Not enabled' : '')}</small></span><span className="agent-timeline-toggle-end"><time>{formatTime(step.at)}</time><StatusBadge status={status || 'waiting'} /><ChevronRight size={15} /></span></button>{isExpanded && <div className="agent-timeline-expanded">{supplemental(step)}{step.key === 'notify' && <small className="agent-notification-timing">Notification stage recorded at {formatTime(step.at)}; no acknowledgement email was sent because this integration is not enabled.</small>}</div>}</div></li>;
-          })}</ol>
-          {event.error && <div className="agent-detail-error"><TriangleAlert size={15} />{event.error}</div>}
         </section>
       </div>
     </div>

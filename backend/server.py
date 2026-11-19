@@ -15,8 +15,8 @@ from backend.agent_workspace.integrations import (
     test_jira_connection,
     test_outlook_connection,
 )
-from backend.agent_workspace.monitor import InboxCheckInProgress, check_inbox_now
-from backend.agent_workspace.state import read_state
+from backend.agent_workspace.monitor import InboxCheckInProgress, check_inbox_now, reconcile_pending_jira_notifications
+from backend.agent_workspace.state import prune_execution_history, read_state
 from backend.api_service import _is_authenticated, dispatch_request, health_status
 from backend.incident_api import dispatch_incident_request
 from backend.incident_auth import INCIDENT_COOKIE
@@ -41,7 +41,8 @@ def agent_workspace_integrations(request: Request):
 def agent_workspace_status(request: Request):
     if not _is_authenticated(request.headers.get("cookie", "")):
         return JSONResponse({"error": "Enter the application access code to continue."}, status_code=401)
-    state = read_state()
+    reconcile_pending_jira_notifications()
+    state = prune_execution_history()
     events = state.get("events", []) if isinstance(state.get("events", []), list) else []
     seen_ids = state.get("seen_email_ids", [])
     ticket_keys = state.get("ticket_keys", [])

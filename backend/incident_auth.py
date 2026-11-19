@@ -8,7 +8,7 @@ import os
 import time
 from http.cookies import SimpleCookie
 
-from backend.incident_service import IncidentError, _member, _member_by_id
+from backend.jira_incident_service import IncidentError, _member, _member_by_id
 
 INCIDENT_COOKIE = "progressive_incident_user"
 INCIDENT_SESSION_TTL = 8 * 60 * 60

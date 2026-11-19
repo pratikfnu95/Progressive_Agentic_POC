@@ -8,7 +8,8 @@ import html
 import json
 import re
 import threading
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -20,13 +21,18 @@ from backend.agent_workspace.integrations import (
     _get_outlook_token,
     _jira_get,
     _jira_settings,
+    _setting,
+    send_jira_ticket_notification,
 )
 from backend.agent_workspace.state import read_state, update_event, update_execution, update_state, utc_now
 from backend.deepseek_client import DeepSeekAPIError, chat_completion
 
 MAX_BODY_CHARS = 20_000
 MAX_BATCH_EMAILS = 50
+MIN_TIMELINE_STAGE_SECONDS = 2.8
 _CHECK_LOCK = threading.Lock()
+_NOTIFICATION_RECONCILE_LOCK = threading.Lock()
+_NOTIFICATION_RECONCILE_LAST_CHECK = 0.0
 
 
 class InboxCheckInProgress(RuntimeError):
@@ -48,6 +54,133 @@ def _graph_get(url: str, token: str) -> dict:
         raise RuntimeError(f"Microsoft Graph request failed ({type(error).__name__}).") from None
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise RuntimeError("Microsoft Graph returned invalid JSON.") from None
+
+
+def reconcile_pending_jira_notifications() -> None:
+    """Mark notices complete only after the matching email appears in the recipient mailbox."""
+    global _NOTIFICATION_RECONCILE_LAST_CHECK
+    if not _NOTIFICATION_RECONCILE_LOCK.acquire(blocking=False):
+        return
+    try:
+        state = read_state()
+        pending = state.get("pending_jira_notifications", [])
+        if not isinstance(pending, list):
+            pending = []
+        # Earlier versions called Graph acceptance "sent" and persisted a green
+        # step without delivery evidence. Reclassify those records so they can
+        # be verified by the same mailbox check instead of keeping a false green.
+        pending_ids = {str(item.get("id") or "") for item in pending if isinstance(item, dict)}
+        migrated = False
+        for event in state.get("events", []):
+            if not isinstance(event, dict) or not event.get("jira_key"):
+                continue
+            notify_step = next((step for step in event.get("steps", []) if step.get("key") == "notify"), None)
+            if not notify_step or notify_step.get("status") != "complete" or "Delivery confirmed" in str(notify_step.get("detail") or ""):
+                continue
+            notice_id = f"legacy:{event.get('run_id', 'run')}:{event['id']}:{event['jira_key']}"
+            if notice_id in pending_ids:
+                continue
+            accepted_at = str(notify_step.get("at") or event.get("received_at") or "")
+            if not accepted_at:
+                continue
+            notice = {
+                "id": notice_id,
+                "run_id": event.get("run_id", ""),
+                "ticket_key": event["jira_key"],
+                "recipient": "smartwealthai15@outlook.com",
+                "subject": f"Jira ticket {event['jira_key']} assigned to you",
+                "accepted_at": accepted_at,
+                "event_ids": [event["id"]],
+            }
+            pending.append(notice)
+            pending_ids.add(notice_id)
+            _step(event, "notify", "active", f"Verifying Outlook delivery for {event['jira_key']}")
+            migrated = True
+        if migrated:
+            update_state(pending_jira_notifications=pending[-500:])
+        if not pending:
+            return
+        if time.monotonic() - _NOTIFICATION_RECONCILE_LAST_CHECK < 5:
+            return
+        _NOTIFICATION_RECONCILE_LAST_CHECK = time.monotonic()
+
+        # The notification destination is the connected Outlook inbox. Graph
+        # sendMail has no delivery callback, so inspect Inbox and Junk Email for
+        # the unique ticket subject after Exchange accepted the send request.
+        token = _get_outlook_token()
+        earliest = min(str(item.get("accepted_at") or "") for item in pending)
+        try:
+            earliest_dt = datetime.fromisoformat(earliest.replace("Z", "+00:00"))
+        except ValueError:
+            earliest_dt = datetime.now(timezone.utc)
+        # Allow small clock skew between the app host and Exchange timestamps.
+        received_after = (earliest_dt - timedelta(seconds=15)).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        query = urlencode({
+            "$filter": f"receivedDateTime ge {received_after}",
+            "$select": "subject,receivedDateTime,toRecipients",
+            "$top": "100",
+        })
+        folders = {
+            "Inbox": "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
+            "Junk Email": "https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages",
+        }
+        delivered: dict[str, str] = {}
+        for folder_name, folder_url in folders.items():
+            try:
+                messages = _graph_get(f"{folder_url}?{query}", token).get("value", [])
+            except RuntimeError:
+                # A transient Graph read issue must leave the notification
+                # pending; it must never turn an unverified send green.
+                return
+            for message in messages:
+                subject = str(message.get("subject") or "")
+                recipients = {
+                    str((recipient.get("emailAddress") or {}).get("address") or "").casefold()
+                    for recipient in message.get("toRecipients", [])
+                }
+                for notice in pending:
+                    if subject == notice.get("subject") and str(notice.get("recipient") or "").casefold() in recipients:
+                        confirm_after = str(notice.get("confirm_after") or "")
+                        if confirm_after:
+                            try:
+                                if datetime.now(timezone.utc) < datetime.fromisoformat(confirm_after.replace("Z", "+00:00")):
+                                    continue
+                            except ValueError:
+                                pass
+                        delivered[str(notice.get("id") or "")] = folder_name
+
+        if not delivered:
+            return
+
+        remaining = []
+        events = [event for event in state.get("events", []) if isinstance(event, dict)]
+        events_by_id = {str(event.get("id") or ""): event for event in events}
+        for notice in pending:
+            notice_id = str(notice.get("id") or "")
+            folder_name = delivered.get(notice_id)
+            if not folder_name:
+                remaining.append(notice)
+                continue
+            detail = f"Jira assignment notification sent to {notice.get('recipient')} for {notice.get('ticket_key')} · Delivery confirmed"
+            for event_id in notice.get("event_ids", []):
+                event = events_by_id.get(str(event_id))
+                if event:
+                    _step(event, "notify", "complete", detail)
+        update_state(pending_jira_notifications=remaining)
+        remaining_run_ids = {str(item.get("run_id") or "") for item in remaining if isinstance(item, dict)}
+        resolved_run_ids = {str(item.get("run_id") or "") for item in pending if str(item.get("id") or "") in delivered}
+        for run_id in resolved_run_ids - remaining_run_ids:
+            run = next((item for item in read_state().get("executions", []) if item.get("id") == run_id), None)
+            if run and run.get("status") == "running" and run.get("current_step") == "Waiting for requester notification delivery confirmation":
+                finished_at = utc_now()
+                run.update({"status": "completed" if not run.get("failures") else "partially_completed", "active_stage": "complete", "stage_times": {**run.get("stage_times", {}), "complete": finished_at}, "completed_at": finished_at, "current_step": "Run completed" if not run.get("failures") else "Run completed with errors"})
+                update_execution(run)
+    except (IntegrationCheckError, RuntimeError, ValueError, TypeError):
+        # Authorization expiry or a temporary service problem leaves the UI in
+        # its truthful pending state. A later status refresh will try again.
+        return
+    finally:
+        _NOTIFICATION_RECONCILE_LOCK.release()
 
 
 def _list_window_headers(token: str, start_at: datetime, end_at: datetime) -> list[dict]:
@@ -284,6 +417,24 @@ def _jira_duplicate(items: list[dict], project_key: str, current_run_keys: set[s
 
 def _create_jira_issue(items: list[dict], project_key: str) -> dict:
     base_url, email, api_token, _ = _jira_settings()
+    assignee_name = _setting("JIRA_ASSIGNEE_NAME", "Pratik") or "Pratik"
+    assignable_users = _jira_get(
+        base_url,
+        email,
+        api_token,
+        "/rest/api/3/user/assignable/search?" + urlencode({"project": project_key, "query": assignee_name, "maxResults": "100"}),
+    )
+    if not isinstance(assignable_users, list):
+        raise RuntimeError("Jira returned an unexpected response while looking up the configured assignee.")
+    assignee = next((
+        user for user in assignable_users
+        if user.get("active") and str(user.get("displayName") or "").strip().casefold() == assignee_name.casefold() and user.get("accountId")
+    ), None)
+    if not assignee:
+        raise RuntimeError(
+            f"Jira user '{assignee_name}' was not found as an assignable user in project {project_key}. "
+            "Set JIRA_ASSIGNEE_NAME in backend/agent_workspace/.env to the exact Jira display name."
+        )
     primary = items[0]
     description_lines = [
         f"Intent: {primary['extracted']['intent']}",
@@ -306,6 +457,7 @@ def _create_jira_issue(items: list[dict], project_key: str) -> dict:
         "summary": primary["extracted"]["summary"],
         "description": _adf_description(description_lines),
         "priority": {"name": "Medium"},
+        "assignee": {"accountId": assignee["accountId"]},
         "labels": labels,
     }}
     credential = base64.b64encode(f"{email}:{api_token}".encode("utf-8")).decode("ascii")
@@ -317,7 +469,7 @@ def _create_jira_issue(items: list[dict], project_key: str) -> dict:
     )
     try:
         with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            return {**json.loads(response.read().decode("utf-8")), "assignee_name": assignee.get("displayName") or assignee_name}
     except HTTPError as error:
         detail = error.read().decode("utf-8", "replace")[:1000]
         raise RuntimeError(f"Jira issue creation failed with HTTP {error.code}: {detail}") from None
@@ -346,11 +498,11 @@ def _create_event(message: dict, message_id: str, run_id: str, extracted: dict |
         "priority": "Medium",
         "assignee": "Unassigned",
         "steps": [
-            {"key": "email", "label": "Email received", "status": "complete", "detail": "Recovered from Junk and moved to Inbox" if recovered and moved_to_inbox else "Recovered from Junk Email" if recovered else "Received within this check window", "at": utc_now()},
-            {"key": "intent", "label": "Intent & context", "status": "active", "detail": "Extracting incident details", "at": utc_now()},
+            {"key": "email", "label": "Email received", "status": "active", "detail": "Retrieving Outlook message", "at": utc_now()},
+            {"key": "intent", "label": "Intent & context", "status": "waiting", "detail": "Waiting for email retrieval", "at": ""},
             {"key": "duplicate", "label": "Duplicate check", "status": "waiting", "detail": "Waiting for email analysis", "at": ""},
             {"key": "jira", "label": "Jira ticket", "status": "waiting", "detail": "Waiting for duplicate validation", "at": ""},
-            {"key": "notify", "label": "Requester notification", "status": "skipped", "detail": "Email acknowledgement is not enabled", "at": ""},
+            {"key": "notify", "label": "Requester notification", "status": "waiting", "detail": "Waiting for Jira ticket creation", "at": ""},
         ],
     }
 
@@ -361,6 +513,23 @@ def _step(event: dict, key: str, status: str, detail: str) -> None:
             item.update({"status": status, "detail": detail, "at": utc_now()})
             break
     update_event(event)
+
+
+def _wait_for_stage_minimum(started_at: float) -> None:
+    remaining = MIN_TIMELINE_STAGE_SECONDS - (time.monotonic() - started_at)
+    if remaining > 0:
+        time.sleep(remaining)
+
+
+def _set_execution_stage(execution: dict, stage: str, label: str) -> None:
+    """Persist the single stage currently running, including runs with no email events."""
+    execution["active_stage"] = stage
+    execution["current_step"] = label
+    execution.setdefault("stage_times", {})[stage] = utc_now()
+    update_execution(execution)
+    current_run = read_state().get("current_run")
+    if isinstance(current_run, dict) and current_run.get("id") == execution.get("id"):
+        update_state(current_run={**current_run, "active_stage": stage, "current_step": label})
 
 
 def _mark_failed(event: dict, stage: str, error: str) -> None:
@@ -385,7 +554,7 @@ def check_inbox_now() -> dict:
             sequence = int(state.get("execution_sequence", 0)) + 1
             run_id = f"RUN-{sequence:04d}"
             finished_at = end_at.isoformat(timespec="milliseconds")
-            execution = {"id": run_id, "status": "completed", "started_at": finished_at, "completed_at": finished_at, "current_step": "Baseline captured", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Initial baseline captured; pre-existing inbox mail was not processed."}
+            execution = {"id": run_id, "status": "completed", "started_at": finished_at, "completed_at": finished_at, "active_stage": "complete", "stage_times": {"complete": finished_at}, "current_step": "Baseline captured", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Initial baseline captured; pre-existing inbox mail was not processed."}
             update_execution(execution)
             update_state(execution_sequence=sequence, monitor_status="manual", last_run_at=finished_at, last_poll_at=finished_at, last_run_result={"status": "baseline", "message": "Initial baseline captured; pre-existing inbox mail was not processed."}, error="")
             return {"id": run_id, "status": "baseline", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "message": "Initial baseline captured. New email will be processed on the next check."}
@@ -393,7 +562,7 @@ def check_inbox_now() -> dict:
         sequence = int(state.get("execution_sequence", 0)) + 1
         run_id = f"RUN-{sequence:04d}"
         run_started_at = end_at.isoformat(timespec="milliseconds")
-        execution = {"id": run_id, "status": "running", "started_at": run_started_at, "completed_at": None, "current_step": "Connecting to Outlook and Jira", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Agent run started."}
+        execution = {"id": run_id, "status": "running", "started_at": run_started_at, "completed_at": None, "active_stage": "email", "stage_times": {"email": run_started_at}, "current_step": "Checking Outlook inbox", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Agent run started."}
         update_execution(execution)
         update_state(execution_sequence=sequence)
 
@@ -402,7 +571,7 @@ def check_inbox_now() -> dict:
         outlook_token = _get_outlook_token()
         update_state(
             monitor_status="checking",
-            current_run={"id": run_id, "started_at": run_started_at, "window_start": start_at.isoformat(timespec="milliseconds"), "window_end": end_at.isoformat(timespec="milliseconds"), "current_step": "Reading the inbox window"},
+            current_run={"id": run_id, "started_at": run_started_at, "window_start": start_at.isoformat(timespec="milliseconds"), "window_end": end_at.isoformat(timespec="milliseconds"), "active_stage": "email", "current_step": "Checking Outlook inbox"},
             error="",
         )
         processed = set(state.get("processed_message_hashes", []))
@@ -412,6 +581,7 @@ def check_inbox_now() -> dict:
             for event in state.get("events", [])
             if event.get("status") in ("created", "duplicate") and _report_id(str(event.get("subject") or ""))
         }
+        email_stage_started = time.monotonic()
         inbox_headers = _list_window_headers(outlook_token, start_at, end_at)
         junk_scan_error = ""
         try:
@@ -433,9 +603,8 @@ def check_inbox_now() -> dict:
             inbox_headers + recoverable_junk_headers,
             key=lambda header: str(header.get("receivedDateTime") or ""),
         )
-        execution.update({"emails_found": len(headers), "current_step": f"Analyzing {len(headers)} email(s)" if headers else "No new emails found"})
+        execution.update({"emails_found": len(headers)})
         update_execution(execution)
-        update_state(current_run={**(read_state().get("current_run") or {}), "current_step": execution["current_step"]})
         candidate_headers = []
         for header in headers:
             if not header.get("id"):
@@ -452,7 +621,7 @@ def check_inbox_now() -> dict:
         newly_seen_ids = [_message_hash(str(item["id"])) for item in candidate_headers if _message_hash(str(item["id"])) not in seen_set]
         if newly_seen_ids:
             update_state(seen_email_ids=(seen_email_ids + newly_seen_ids)[-10_000:])
-        batch: list[dict] = []
+        retrieved: list[dict] = []
         failures = 0
         for header in candidate_headers:
             message_id = str(header["id"])
@@ -467,24 +636,54 @@ def check_inbox_now() -> dict:
                     raise RuntimeError("Email has no readable text.")
                 event["body_preview"] = body[:2000]
                 update_event(event)
-                extracted = _classify_and_summarize(message, body)
-                event.update({key: extracted[key] for key in ("intent", "summary", "description")})
-                _step(event, "intent", "complete", "Intent and ticket context extracted")
-                batch.append({
+                retrieved.append({
                     "message_id": message_id,
                     "message": message,
-                    "extracted": extracted,
+                    "body": body,
                     "event": event,
-                    "fingerprint": _exact_fingerprint(message, body),
                     "force_new_ticket": _is_ui_test_report(message),
                 })
             except (DeepSeekAPIError, IntegrationCheckError, RuntimeError, ValueError) as error:
-                _mark_failed(event, "intent", str(error))
+                _mark_failed(event, "email", str(error))
                 failures += 1
 
-        execution["current_step"] = "Checking for duplicate incidents"
-        update_execution(execution)
-        update_state(current_run={**(read_state().get("current_run") or {}), "current_step": execution["current_step"]})
+        _wait_for_stage_minimum(email_stage_started)
+        for item in retrieved:
+            event = item["event"]
+            message = item["message"]
+            detail = "Recovered from Junk and moved to Inbox" if message.get("_recovered_from_junk") and message.get("_moved_to_inbox") else "Recovered from Junk Email" if message.get("_recovered_from_junk") else "Outlook message retrieved"
+            _step(event, "email", "complete", detail)
+        for item in retrieved:
+            event = item["event"]
+            _step(event, "intent", "active", "Extracting intent and incident context")
+
+        _set_execution_stage(execution, "intent", f"Analyzing {len(retrieved)} email(s)" if retrieved else "No email context to extract")
+        batch: list[dict] = []
+        intent_stage_started = time.monotonic()
+        for item in retrieved:
+            try:
+                extracted = _classify_and_summarize(item["message"], item["body"])
+                item["event"].update({key: extracted[key] for key in ("intent", "summary", "description")})
+                batch.append({
+                    "message_id": item["message_id"],
+                    "message": item["message"],
+                    "extracted": extracted,
+                    "event": item["event"],
+                    "fingerprint": _exact_fingerprint(item["message"], item["body"]),
+                    "force_new_ticket": item["force_new_ticket"],
+                })
+                update_event(item["event"])
+            except (DeepSeekAPIError, IntegrationCheckError, RuntimeError, ValueError) as error:
+                _mark_failed(item["event"], "intent", str(error))
+                failures += 1
+        _wait_for_stage_minimum(intent_stage_started)
+        for item in batch:
+            _step(item["event"], "intent", "complete", "Intent and ticket context extracted")
+
+        _set_execution_stage(execution, "duplicate", "Checking for duplicate incidents" if batch else "No incidents to compare")
+        for item in batch:
+            _step(item["event"], "duplicate", "active", "Checking for matching incidents")
+        duplicate_stage_started = time.monotonic()
         test_report_indices = [index for index, item in enumerate(batch) if item.get("force_new_ticket")]
         regular_indices = [index for index, item in enumerate(batch) if not item.get("force_new_ticket")]
         groups: list[list[int]] = [[index] for index in test_report_indices]
@@ -501,89 +700,161 @@ def check_inbox_now() -> dict:
         duplicates_grouped = 0
         processed_now = list(processed)
         current_run_keys: set[str] = set()
+        plans: list[dict] = []
         for indices in groups:
             group = [batch[index] for index in indices]
             if not group:
                 continue
+            force_new = all(item.get("force_new_ticket") for item in group)
             try:
-                execution["current_step"] = "Creating Jira tickets"
-                update_execution(execution)
-                update_state(current_run={**(read_state().get("current_run") or {}), "current_step": execution["current_step"]})
-                force_new = all(item.get("force_new_ticket") for item in group)
-                if force_new:
-                    for item in group:
-                        _step(item["event"], "duplicate", "skipped", "POC report: incident similarity checks are bypassed")
-                    # Search only the exact source-email labels for retry safety. Never compare
-                    # this POC submission to other Jira summaries or incidents.
-                    existing_ticket = _jira_duplicate(group, project_key, current_run_keys, match_summary=False)
-                else:
-                    for item in group:
-                        _step(item["event"], "duplicate", "active", "Checking this batch and Jira for the same incident")
-                    existing_ticket = _jira_duplicate(group, project_key, current_run_keys)
-                if existing_ticket:
-                    issue_key = str(existing_ticket.get("key") or "")
-                    issue_url = f"{base_url}/browse/{issue_key}" if issue_key else ""
-                    duplicates_grouped += len(group)
-                    duplicate_ids = list(read_state().get("duplicate_email_ids", []))
-                    duplicate_ids.extend(event_id for event_id in (item["event"]["id"] for item in group) if event_id not in duplicate_ids)
-                    update_state(duplicate_email_ids=duplicate_ids[-10_000:])
-                    for item in group:
-                        event = item["event"]
-                        event.update({"jira_key": issue_key, "jira_url": issue_url, "jira_project_key": project_key, "status": "duplicate"})
-                        _step(event, "duplicate", "duplicate", f"Matched existing Jira issue {issue_key}")
-                        _step(event, "jira", "skipped", "No new Jira issue created")
-                        processed_now.append(event["id"])
-                    continue
+                # UI reports are always new Jira issues, but this exact-label
+                # lookup still protects retries from creating the same issue twice.
+                existing_ticket = _jira_duplicate(group, project_key, current_run_keys, match_summary=not force_new)
+                plans.append({"group": group, "force_new": force_new, "existing_ticket": existing_ticket})
+            except (IntegrationCheckError, RuntimeError, ValueError) as error:
+                plans.append({"group": group, "force_new": force_new, "duplicate_error": error})
 
-                leader = group[0]
-                if not force_new:
-                    for index, item in enumerate(group):
-                        event = item["event"]
-                        if index:
-                            duplicates_grouped += 1
-                            event["status"] = "duplicate"
-                            duplicate_ids = list(read_state().get("duplicate_email_ids", []))
-                            if event["id"] not in duplicate_ids:
-                                duplicate_ids.append(event["id"])
-                                update_state(duplicate_email_ids=duplicate_ids[-10_000:])
-                            _step(event, "duplicate", "duplicate", f"Grouped with {leader['event']['subject']}")
-                        else:
-                            _step(event, "duplicate", "complete", "No existing matching Jira issue")
-                for item in group:
-                    _step(item["event"], "jira", "active", "Creating one Medium priority Task for this incident")
-                issue = _create_jira_issue(group, project_key)
-                issue_key = str(issue.get("key") or "")
-                issue_url = f"{base_url}/browse/{issue_key}" if issue_key else ""
-                if issue_key:
-                    current_run_keys.add(issue_key)
-                ticket_keys = list(read_state().get("ticket_keys", []))
-                if issue_key and issue_key not in ticket_keys:
-                    ticket_keys.append(issue_key)
-                    update_state(ticket_keys=ticket_keys[-10_000:])
-                for index, item in enumerate(group):
-                    event = item["event"]
-                    event.update({"jira_key": issue_key, "jira_url": issue_url, "jira_project_key": project_key})
-                    if index == 0:
-                        event["status"] = "created"
-                        _step(event, "jira", "complete", f"{issue_key} created · Medium · Unassigned")
-                    else:
-                        event["status"] = "duplicate"
-                        _step(event, "jira", "duplicate", f"Grouped under {issue_key}; no second ticket created")
-                    processed_now.append(event["id"])
-                tickets_created += 1
-            except (DeepSeekAPIError, IntegrationCheckError, RuntimeError, ValueError) as error:
+        _wait_for_stage_minimum(duplicate_stage_started)
+        ticket_plans: list[dict] = []
+        for plan in plans:
+            group = plan["group"]
+            if plan.get("duplicate_error"):
                 failures += len(group)
                 for item in group:
-                    if item["event"].get("status") not in ("failed",):
-                        _mark_failed(item["event"], "jira", str(error))
+                    _mark_failed(item["event"], "duplicate", str(plan["duplicate_error"]))
+                continue
+            existing_ticket = plan.get("existing_ticket")
+            if existing_ticket:
+                issue_key = str(existing_ticket.get("key") or "")
+                issue_url = f"{base_url}/browse/{issue_key}" if issue_key else ""
+                duplicates_grouped += len(group)
+                duplicate_ids = list(read_state().get("duplicate_email_ids", []))
+                duplicate_ids.extend(event_id for event_id in (item["event"]["id"] for item in group) if event_id not in duplicate_ids)
+                update_state(duplicate_email_ids=duplicate_ids[-10_000:])
+                for item in group:
+                    event = item["event"]
+                    event.update({"jira_key": issue_key, "jira_url": issue_url, "jira_project_key": project_key, "status": "duplicate"})
+                    _step(event, "duplicate", "duplicate", f"Matched existing Jira issue {issue_key}")
+                    _step(event, "jira", "skipped", "No new Jira issue created")
+                    _step(event, "notify", "skipped", "No notification sent because this Jira issue already existed")
+                    processed_now.append(event["id"])
+                continue
 
-        # Record the notification checkpoint even while requester acknowledgements are disabled.
+            leader = group[0]
+            if plan["force_new"]:
+                for item in group:
+                    _step(item["event"], "duplicate", "skipped", "POC report: incident similarity checks are bypassed")
+            else:
+                for index, item in enumerate(group):
+                    event = item["event"]
+                    if index:
+                        duplicates_grouped += 1
+                        event["status"] = "duplicate"
+                        duplicate_ids = list(read_state().get("duplicate_email_ids", []))
+                        if event["id"] not in duplicate_ids:
+                            duplicate_ids.append(event["id"])
+                            update_state(duplicate_email_ids=duplicate_ids[-10_000:])
+                        _step(event, "duplicate", "duplicate", f"Grouped with {leader['event']['subject']}")
+                    else:
+                        _step(event, "duplicate", "complete", "No existing matching Jira issue")
+            ticket_plans.append(plan)
+
+        _set_execution_stage(execution, "jira", "Creating Jira tickets" if ticket_plans else "No Jira tickets needed")
+        jira_stage_started = time.monotonic()
+        if ticket_plans:
+            for plan in ticket_plans:
+                for item in plan["group"]:
+                    _step(item["event"], "jira", "active", "Creating one Medium priority Task for this incident")
+
+        created_plans: list[dict] = []
+        for plan in ticket_plans:
+            try:
+                plan["issue"] = _create_jira_issue(plan["group"], project_key)
+                created_plans.append(plan)
+            except (IntegrationCheckError, RuntimeError, ValueError) as error:
+                plan["jira_error"] = error
+        _wait_for_stage_minimum(jira_stage_started)
+
+        notifications_to_send: list[dict] = []
+        for plan in ticket_plans:
+            group = plan["group"]
+            if plan.get("jira_error"):
+                failures += len(group)
+                for item in group:
+                    _mark_failed(item["event"], "jira", str(plan["jira_error"]))
+                continue
+            issue = plan["issue"]
+            issue_key = str(issue.get("key") or "")
+            issue_url = f"{base_url}/browse/{issue_key}" if issue_key else ""
+            if issue_key:
+                current_run_keys.add(issue_key)
+            ticket_keys = list(read_state().get("ticket_keys", []))
+            if issue_key and issue_key not in ticket_keys:
+                ticket_keys.append(issue_key)
+                update_state(ticket_keys=ticket_keys[-10_000:])
+            leader = group[0]
+            for index, item in enumerate(group):
+                event = item["event"]
+                event.update({"jira_key": issue_key, "jira_url": issue_url, "jira_project_key": project_key, "assignee": issue.get("assignee_name", "Pratik")})
+                if index == 0:
+                    event["status"] = "created"
+                    _step(event, "jira", "complete", f"{issue_key} created · Medium · assigned to {event['assignee']}")
+                else:
+                    event["status"] = "duplicate"
+                    _step(event, "jira", "duplicate", f"Grouped under {issue_key}; no second ticket created")
+                processed_now.append(event["id"])
+            tickets_created += 1
+            plan.update({"issue_key": issue_key, "issue_url": issue_url, "leader": leader})
+            notifications_to_send.append(plan)
+
+        _set_execution_stage(execution, "notify", "Sending requester notifications" if notifications_to_send else "No requester notifications needed")
+        notification_stage_started = time.monotonic()
+        notification_errors: list[tuple[dict, Exception]] = []
+        for plan in notifications_to_send:
+            group = plan["group"]
+            issue_key = plan["issue_key"]
+            issue_url = plan["issue_url"]
+            for item in group:
+                _step(item["event"], "notify", "active", f"Sending Jira assignment notification to smartwealthai15@outlook.com for {issue_key}")
+            try:
+                notification_result = send_jira_ticket_notification(
+                    issue_key,
+                    plan["leader"]["extracted"]["summary"],
+                    "Medium",
+                    issue_url,
+                )
+                accepted_at = notification_result["accepted_at"]
+                confirmation_after = (datetime.fromisoformat(accepted_at.replace("Z", "+00:00")) + timedelta(seconds=MIN_TIMELINE_STAGE_SECONDS)).isoformat(timespec="seconds").replace("+00:00", "Z")
+                notice = {
+                    "id": f"{run_id}:{issue_key}:{plan['leader']['event']['id']}",
+                    "run_id": run_id,
+                    "ticket_key": issue_key,
+                    "recipient": notification_result["recipient"],
+                    "subject": notification_result["subject"],
+                    "accepted_at": accepted_at,
+                    "confirm_after": confirmation_after,
+                    "event_ids": [item["event"]["id"] for item in group],
+                }
+                pending_notices = list(read_state().get("pending_jira_notifications", []))
+                pending_notices.append(notice)
+                update_state(pending_jira_notifications=pending_notices[-500:])
+                for item in group:
+                    _step(item["event"], "notify", "active", f"Outlook accepted the notification; waiting for delivery confirmation for {issue_key}")
+            except (IntegrationCheckError, RuntimeError, ValueError) as error:
+                notification_errors.append((plan, error))
+        _wait_for_stage_minimum(notification_stage_started)
+        for plan, error in notification_errors:
+            failures += len(plan["group"])
+            for item in plan["group"]:
+                _step(item["event"], "notify", "failed", f"Jira ticket was created, but email notification failed: {str(error)[:140]}")
+
+        # Messages that never produced a new ticket have no assignment notification to send.
         for event in read_state().get("events", []):
             if event.get("run_id") != run_id:
                 continue
             notification = next((step for step in event.get("steps", []) if step.get("key") == "notify"), None)
-            if notification and notification.get("status") == "skipped" and not notification.get("at"):
-                _step(event, "notify", "skipped", "Requester notification not sent; email acknowledgement is not enabled")
+            if notification and notification.get("status") == "waiting":
+                _step(event, "notify", "skipped", "No notification sent because no new Jira ticket was created")
 
         # A partial run keeps the old watermark. Successfully handled message hashes remain
         # durable so a retry of that window skips them and cannot create a second Jira issue.
@@ -619,10 +890,19 @@ def check_inbox_now() -> dict:
             "failures": failures,
             "message": result_message,
         }
+        pending_for_run = any(
+            isinstance(notice, dict) and notice.get("run_id") == run_id
+            for notice in read_state().get("pending_jira_notifications", [])
+        )
+        if complete and pending_for_run:
+            result["status"] = "running"
+            result["message"] += " Waiting for Outlook delivery confirmation."
         execution.update({
-            "status": "completed" if complete else "partially_completed",
-            "completed_at": utc_now(),
-            "current_step": "Run completed" if complete else "Run completed with errors",
+            "status": "running" if complete and pending_for_run else "completed" if complete else "partially_completed",
+            "completed_at": None if complete and pending_for_run else utc_now(),
+            "active_stage": "notify" if complete and pending_for_run else "complete",
+            "stage_times": {**execution.get("stage_times", {}), **({} if complete and pending_for_run else {"complete": utc_now()})},
+            "current_step": "Waiting for requester notification delivery confirmation" if complete and pending_for_run else "Run completed" if complete else "Run completed with errors",
             "emails_found": len(headers),
             "emails_processed": result["emails_processed"],
             "emails_skipped": result["emails_skipped"],
@@ -649,7 +929,8 @@ def check_inbox_now() -> dict:
     except (IntegrationCheckError, RuntimeError, DeepSeekAPIError, ValueError) as error:
         state = read_state()
         if execution:
-            execution.update({"status": "failed", "completed_at": utc_now(), "current_step": "Run failed", "message": str(error)[:500], "failures": max(1, int(execution.get("failures", 0)))})
+            failed_at = utc_now()
+            execution.update({"status": "failed", "completed_at": failed_at, "active_stage": "complete", "stage_times": {**execution.get("stage_times", {}), "complete": failed_at}, "current_step": "Run failed", "message": str(error)[:500], "failures": max(1, int(execution.get("failures", 0)))})
             update_execution(execution)
         update_state(
             monitor_status="manual",

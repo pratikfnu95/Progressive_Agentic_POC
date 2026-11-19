@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from backend.incident_service import IncidentError
+from backend.jira_incident_service import IncidentError
 
 
 ROOT = Path(__file__).resolve().parents[1]

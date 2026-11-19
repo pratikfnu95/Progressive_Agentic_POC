@@ -82,7 +82,7 @@ function formatActivityTime(value) {
 }
 
 function IncidentLoading() {
-  const stages = ['Connecting to incident data', 'Retrieving ticket details', 'Preparing your dashboard'];
+  const stages = ['Connecting to Jira', 'Retrieving ticket details', 'Preparing your dashboard'];
   const [stage, setStage] = useState(0);
 
   useEffect(() => {
@@ -556,7 +556,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowI
       setIncidentError('');
       return true;
     } catch (error) {
-      if (!incidentSnapshotCache.snapshot) setIncidentError(error.message || 'Could not load incident tickets from Databricks.');
+      if (!incidentSnapshotCache.snapshot) setIncidentError(error.message || 'Could not load incident tickets from Jira.');
       else setMutationNotice({ type: 'warning', title: 'Showing the last loaded tickets', detail: 'The latest refresh could not complete. Try refreshing again in a moment.' });
       return false;
     } finally {
@@ -685,7 +685,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowI
   async function createIncidentTicket(values) {
     if (pendingTicketId) throw new Error('Another ticket update is still in progress. Please wait and try again.');
     setPendingTicketId('new-ticket');
-    setMutationNotice({ type: 'loading', title: 'Creating incident ticket…', detail: 'Saving the ticket and recording its assignment in Databricks.' });
+    setMutationNotice({ type: 'loading', title: 'Creating incident ticket…', detail: 'Creating the ticket in Jira.' });
     try {
       const response = await fetch('/api/incidents', {
         method: 'POST',
@@ -716,7 +716,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowI
   return <section className="dashboard-page">
     <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} /></div>
     <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onCreate={() => setModal({ type: 'create_ticket' })} onReportIssue={() => setModal({ type: 'report_issue' })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
-      <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Databricks</p>
+      {isIncident && <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Jira</p>}
     </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onCreateTicket={createIncidentTicket} onLogin={onLogin} currentUser={currentUser} />
     {isIncident && <IncidentMutationToast notice={mutationNotice} onClose={() => { mutationNoticeId.current = null; setMutationNotice(null); }} />}
   </section>;

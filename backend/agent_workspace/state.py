@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_PATH = Path(__file__).with_name(".runtime_state.json")
+EXECUTION_HISTORY_LIMIT = 10
 
 
 def utc_now() -> str:
@@ -67,10 +68,27 @@ def update_execution(execution: dict[str, Any]) -> dict[str, Any]:
     executions = state.get("executions")
     if not isinstance(executions, list):
         executions = []
-    executions = [current for current in executions if current.get("id") != execution.get("id")]
-    executions.insert(0, execution)
-    state["executions"] = executions[:100]
+    executions = [current for current in executions if isinstance(current, dict) and current.get("id") != execution.get("id")]
+    executions.append(execution)
+    executions.sort(key=lambda current: str(current.get("started_at") or current.get("completed_at") or ""), reverse=True)
+    state["executions"] = executions[:EXECUTION_HISTORY_LIMIT]
     state["updated_at"] = utc_now()
     write_state(state)
+    return state
+
+
+def prune_execution_history() -> dict[str, Any]:
+    """Delete persisted execution summaries older than the newest ten runs."""
+    state = read_state()
+    executions = state.get("executions")
+    if not isinstance(executions, list):
+        return state
+    valid_executions = [execution for execution in executions if isinstance(execution, dict)]
+    valid_executions.sort(key=lambda current: str(current.get("started_at") or current.get("completed_at") or ""), reverse=True)
+    retained = valid_executions[:EXECUTION_HISTORY_LIMIT]
+    if len(retained) != len(executions) or retained != executions:
+        state["executions"] = retained
+        state["updated_at"] = utc_now()
+        write_state(state)
     return state
 
