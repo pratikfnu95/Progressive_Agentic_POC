@@ -1850,7 +1850,7 @@ button.agent-catalog-card:hover { transform: translateY(-2px); border-color: #aa
 /* Incident Agent operations overview and drilldown. */
 .agent-operations-page .agent-workspace-content { max-width: 1320px; padding-bottom: 38px; }
 .agent-operations-page .agent-workspace-header { align-items: center; margin-bottom: 18px; }
-.agent-operations-page .agent-workspace-header h1 { font-size: clamp(25px, 3vw, 34px); }
+.agent-operations-page .agent-workspace-header h1 { font-size: clamp(23px, 2.8vw, 32px); }
 .agent-header-trigger-button { min-width: 132px; min-height: 36px; flex: 0 0 auto; gap: 7px; padding: 0 14px; font-size: 10px; box-shadow: 0 5px 14px #075b9d20,inset 0 1px #ffffff35; }
 .agent-operations-page .agent-live-badge { flex: 0 0 auto; }
 .agent-operations-control { display: grid; grid-template-columns: minmax(0,1fr) minmax(360px, .9fr); align-items: center; gap: 24px; min-height: 126px; padding: 20px 22px; }
@@ -1918,6 +1918,7 @@ button.agent-catalog-card:hover { transform: translateY(-2px); border-color: #aa
 .agent-run-id-link { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: #086da5; font: inherit; font-size: 11px; font-weight: 750; cursor: pointer; }
 .agent-run-table .agent-status-badge { font-size: 9px; }
 .agent-run-status-cell { display: inline-flex; align-items: center; gap: 8px; }
+.agent-detail-heading > .agent-run-status-cell .agent-status-badge { font-size: 12px; }
 .agent-stop-run-button { display: inline-flex; min-width: 22px; min-height: 22px; align-items: center; justify-content: center; gap: 4px; padding: 0 5px; border: 1px solid #f0b8b5; border-radius: 6px; background: #fff5f4; color: #c83f39; cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .15s ease; }
 .agent-stop-run-button:hover:not(:disabled) { border-color: #d94b45; background: #ffe8e6; transform: translateY(-1px); }
 .agent-stop-run-button:disabled { cursor: wait; opacity: .72; }
@@ -1958,7 +1959,7 @@ button.agent-catalog-card:hover { transform: translateY(-2px); border-color: #aa
 .agent-detail-overlay { position: fixed; z-index: 50; inset: 0; overflow: auto; background: #f5f9fb; animation: agent-rise .2s both; }
 .agent-detail-shell { min-height: 100%; background: radial-gradient(ellipse at 85% 0%,#eaf6fa 0,#f5f9fb 34%,#f7fafc 75%); }
 .agent-detail-topbar { position: sticky; top: 0; z-index: 2; display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 0 max(22px,calc((100vw - 1180px)/2)); border-bottom: 1px solid #dce7ec; background: #fff; box-shadow: 0 2px 8px #193c5208; }
-.agent-detail-topbar button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 0; border: 0; background: transparent; color: #176f99; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer; }
+.agent-detail-topbar button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 0; border: 0; background: transparent; color: #176f99; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .agent-detail-topbar > span { color: #81929d; font-size: 9px; }
 .agent-detail-content { width: min(100% - 40px,1120px); margin: 24px auto 56px; }
 .agent-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 15px; }
