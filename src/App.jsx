@@ -47,6 +47,8 @@ const sidebarArtworkPath = import.meta.env.VITE_SIDEBAR_ARTWORK_PATH || '/assets
 
 function ConnectorLogo({ name }) {
   if (name === 'Databricks') return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true"><path d="m12 3 8 3.5-8 3.5-8-3.5L12 3Z" /><path d="m4 10 8 3.5 8-3.5M4 13.5 12 17l8-3.5M4 17l8 3.5 8-3.5" /></svg>;
+  if (name === 'Outlook') return <svg viewBox="0 0 32 32" aria-hidden="true"><path fill="#0078d4" d="M13 5h15a2 2 0 0 1 2 2v18a2 2 0 0 1-2 2H13z" /><path fill="#28a8ea" d="m13 10 9.5 7L30 11v14a2 2 0 0 1-2 2H13z" /><path fill="#0a5e9a" d="M13 5h15a2 2 0 0 1 2 2v4l-8 6-9-6z" /><path fill="#185abd" d="M3 8.5 15 6v20L3 23.5a2 2 0 0 1-1.5-2V10.5a2 2 0 0 1 1.5-2" /><path fill="#fff" d="M7.2 12.2c.7-.9 1.7-1.3 3-1.3s2.3.4 3 1.3c.7.9 1 2.2 1 3.8s-.4 2.9-1.1 3.8c-.8.9-1.8 1.3-3.1 1.3-1.3 0-2.3-.4-3-1.3-.8-.9-1.1-2.2-1.1-3.8 0-1.6.4-2.9 1.3-3.8m1.4 6.1c.4.5.9.8 1.6.8s1.2-.3 1.6-.8.5-1.3.5-2.3-.2-1.8-.6-2.4c-.4-.5-.9-.8-1.6-.8s-1.2.3-1.6.8-.6 1.3-.6 2.4.3 1.8.7 2.3" /></svg>;
+  if (name === 'Teams') return <svg viewBox="0 0 32 32" aria-hidden="true"><path fill="#5059c9" d="M20 8.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9" transform="translate(0 7)"/><path fill="#7b83eb" d="M25 11h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-4z"/><path fill="#4b53bc" d="M17 12h11v14H17z"/><path fill="#7b83eb" d="M4 10h15a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V12a2 2 0 0 1 2-2"/><path fill="#fff" d="M5.5 14h12v2.6h-4.3V26h-3.3v-9.4H5.5z"/></svg>;
   if (name === 'Snowflake') return <Snowflake size={16} strokeWidth={2.2} aria-hidden="true" />;
   if (name === 'SQL Server') return <Database size={16} strokeWidth={2.1} aria-hidden="true" />;
   if (name === 'Oracle') return <span className="connector-oracle-wordmark" aria-hidden="true">ORACLE</span>;
@@ -189,7 +191,21 @@ function WelcomePromptChips({ onSelect }) {
               <span className="connector-logo connector-databricks"><ConnectorLogo name="Databricks" /></span>
               <span><strong>Databricks</strong><small className="welcome-integration-connected-status">Connected</small></span>
             </div>}
-            {upcomingCategories.filter(({ name }) => names.includes(name)).map(({ name, logo }) => {
+            {title === 'Team tools' && <>
+              <div className="welcome-integration-toggle welcome-integration-connected" aria-label="Jira board connected">
+                <WelcomeCategoryLogo type="jira" />
+                <span><strong>Jira board</strong><small className="welcome-integration-connected-status">Connected</small></span>
+              </div>
+              <div className="welcome-integration-toggle welcome-integration-connected" aria-label="Outlook connected">
+                <span className="connector-logo connector-outlook"><ConnectorLogo name="Outlook" /></span>
+                <span><strong>Outlook</strong><small className="welcome-integration-connected-status">Connected</small></span>
+              </div>
+              <div className="welcome-integration-toggle welcome-integration-coming-soon" aria-label="Teams coming soon">
+                <span className="connector-logo connector-teams"><ConnectorLogo name="Teams" /></span>
+                <span><strong>Teams</strong><small>Coming soon</small></span>
+              </div>
+            </>}
+            {upcomingCategories.filter(({ name }) => names.includes(name) && name !== 'Jira board').map(({ name, logo }) => {
               const isExpanded = expandedIntegration === name;
               return <button
                 type="button"
@@ -859,10 +875,6 @@ function Sidebar({ chats, activeChatId, setActiveChatId, onNewChat, mobileOpen, 
           <ClipboardList size={18} strokeWidth={1.8} />
           <span>Incident Management</span>
         </button>
-        <button className={`side-action${currentPage === 'policies' ? ' side-action-selected' : ''}`} onClick={() => setCurrentPage('policies')} aria-current={currentPage === 'policies' ? 'page' : undefined} title="View policy insights">
-          <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} />
-          <span>Policy Dashboard</span>
-        </button>
       </nav>
 
       <div className="chat-history">
@@ -1530,18 +1542,18 @@ function App() {
         </button>
         {currentPage === 'guide' ? (
           <>
-            <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} /></div>
+            <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} onOpenPolicyDashboard={() => setCurrentPage('policies')} /></div>
             <HowItWorksPage onUsePrompt={openPromptInChat} onNavigate={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }} />
           </>
         ) : currentPage === 'agent' ? (
-          <AgentCatalog currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenIncident={() => setCurrentPage('incident-agent')} onOpenHowItWorks={() => setCurrentPage('guide')} />
+          <AgentCatalog currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenIncident={() => setCurrentPage('incident-agent')} onOpenHowItWorks={() => setCurrentPage('guide')} onOpenPolicyDashboard={() => setCurrentPage('policies')} />
         ) : currentPage === 'incident-agent' ? (
-          <AgentWorkspace currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onBack={() => setCurrentPage('agent')} onOpenHowItWorks={() => setCurrentPage('guide')} />
+          <AgentWorkspace currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onBack={() => setCurrentPage('agent')} onOpenHowItWorks={() => setCurrentPage('guide')} onOpenPolicyDashboard={() => setCurrentPage('policies')} />
         ) : currentPage !== 'chat' ? (
-          <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} />
+          <DashboardPage page={currentPage} currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} onOpenPolicyDashboard={() => setCurrentPage('policies')} />
         ) : !activeChat ? (
           <>
-          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} /></div>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} onOpenPolicyDashboard={() => setCurrentPage('policies')} /></div>
           <section className="welcome-view">
             <div className="welcome-content">
               <h2 key={`${currentUser || 'guest'}-${welcomePrompt.heading}`}>
@@ -1563,7 +1575,7 @@ function App() {
           </>
         ) : (
           <>
-          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} /></div>
+          <div className="chat-account-menu"><UserAccountMenu currentUser={currentUser} onLogin={loginIncidentAccount} onLogout={logoutIncidentAccount} onOpenHowItWorks={() => setCurrentPage('guide')} onOpenPolicyDashboard={() => setCurrentPage('policies')} /></div>
           <section className="conversation-view">
             <div className="conversation-scroll">
               <div className="message-list">

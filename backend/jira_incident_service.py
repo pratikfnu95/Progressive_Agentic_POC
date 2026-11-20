@@ -22,6 +22,7 @@ PRIORITIES = {"Low", "Medium", "High", "Urgent"}
 ASSIGNABLE = ("Pratik", "Sarvesh", "Madhu", "Saurabh")
 KNOWN_TEAM_NAMES = ("Pratik", "Sarvesh", "Madhu", "Saurabh", "Admin")
 TICKET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$", re.I)
+INCIDENT_DOMAIN_RE = re.compile(r"\b(?:incidents?|tickets?|jira)\b", re.I)
 PROMPT_PATH = Path(__file__).with_name("prompts") / "incident_intent.md"
 
 
@@ -329,6 +330,16 @@ def classify_message(question: str, current_user: str = "Not signed in") -> dict
         raise IncidentError("I couldn't interpret that ticket request. Please rephrase it.", 422) from None
     if not isinstance(intent, dict) or intent.get("intent") not in {"list_tickets", "assign", "change_status", "decline", "create_ticket", "clarify", "other"}:
         raise IncidentError("I couldn't interpret that ticket request. Please rephrase it.", 422)
+    # The chat UI tries the incident route before the policy SQL route. Keep
+    # ambiguous ticket-domain messages here instead of letting a missed intent
+    # fall through to Databricks SQL.
+    if intent.get("intent") == "other" and (
+        INCIDENT_DOMAIN_RE.search(question) or _mentions_configured_jira_key(question)
+    ):
+        return {
+            "intent": "clarify",
+            "question": "I can help with Jira incident tickets. Include a Jira ticket key (for example, KAN-25) or ask to list, create, assign, or update a ticket.",
+        }
     return intent
 
 
@@ -336,6 +347,16 @@ def _require_current_user(current_user: str) -> dict:
     if not current_user:
         raise IncidentError("Sign in to manage incident tickets.", 401)
     return _member(current_user)
+
+
+def _mentions_configured_jira_key(question: str) -> bool:
+    try:
+        _, _, _, project_key = _jira_settings()
+    except IntegrationCheckError:
+        return False
+    if not project_key:
+        return False
+    return bool(re.search(rf"\b{re.escape(project_key)}-\d+\b", question, re.I))
 
 
 def handle_incident_request(payload: dict) -> dict:

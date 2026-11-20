@@ -10,12 +10,14 @@ import re
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values
+from email.utils import parsedate_to_datetime
 
 
 ENV_PATH = Path(__file__).with_name(".env")
@@ -36,6 +38,10 @@ class IntegrationCheckError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.code = code
+
+
+class NotificationCancelled(Exception):
+    """Raised when a user stops a notification before it is submitted."""
 
 
 def _setting(name: str, default: str = "") -> str:
@@ -340,7 +346,7 @@ def send_outlook_test_email(subject: str, body: str, report_id: str) -> dict[str
         return {"sent": True, "outlook_accepted": True, "already_sent": False, **sent_record}
 
 
-def send_jira_ticket_notification(ticket_key: str, summary: str, priority: str, jira_url: str) -> dict[str, str]:
+def send_jira_ticket_notification(ticket_key: str, summary: str, priority: str, jira_url: str, *, cancel_event: threading.Event | None = None) -> dict[str, str]:
     """Send the concise Jira assignment notice to the single configured POC recipient."""
     clean_key = re.sub(r"[^A-Z0-9-]", "", str(ticket_key or "").upper())
     clean_summary = re.sub(r"[\r\n]+", " ", str(summary or "")).strip()[:250]
@@ -372,20 +378,54 @@ def send_jira_ticket_notification(ticket_key: str, summary: str, priority: str, 
         method="POST",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"},
     )
-    try:
-        with urlopen(request, timeout=30) as response:
-            if response.status not in (200, 202):
-                raise IntegrationCheckError(f"Microsoft Graph returned HTTP {response.status} while sending the Jira notification.", status_code=502, code="notification_failed")
-    except HTTPError as error:
-        if error.code == 403:
-            raise IntegrationCheckError(
-                "Outlook denied the Jira notification. Confirm Mail.Send consent in the Outlook connection card, then reconnect Outlook.",
-                status_code=502,
-                code="mail_send_permission_denied",
-            ) from None
-        raise IntegrationCheckError(f"Microsoft Graph returned HTTP {error.code} while sending the Jira notification.", status_code=502, code="notification_failed") from None
-    except (URLError, TimeoutError) as error:
-        raise IntegrationCheckError(f"Could not reach Microsoft Graph ({type(error).__name__}) while sending the Jira notification.", status_code=502, code="network_error") from None
+    retry_deadline = time.monotonic() + 180
+    retry_count = 0
+    while True:
+        if cancel_event and cancel_event.is_set():
+            raise NotificationCancelled("Agent run stopped by user before the notification was submitted.")
+        try:
+            with urlopen(request, timeout=30) as response:
+                if response.status not in (200, 202):
+                    raise IntegrationCheckError(f"Microsoft Graph returned HTTP {response.status} while sending the Jira notification.", status_code=502, code="notification_failed")
+            break
+        except HTTPError as error:
+            if error.code == 403:
+                raise IntegrationCheckError(
+                    "Outlook denied the Jira notification. Confirm Mail.Send consent in the Outlook connection card, then reconnect Outlook.",
+                    status_code=502,
+                    code="mail_send_permission_denied",
+                ) from None
+            if error.code != 429:
+                raise IntegrationCheckError(f"Microsoft Graph returned HTTP {error.code} while sending the Jira notification.", status_code=502, code="notification_failed") from None
+
+            retry_count += 1
+            if retry_count > 6:
+                raise IntegrationCheckError("Microsoft Graph continued throttling the Jira notification after six retries.", status_code=502, code="notification_throttled") from None
+            retry_after = str(error.headers.get("Retry-After") or "").strip()
+            try:
+                delay = max(0.0, float(retry_after))
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    delay = max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    delay = min(2 ** (retry_count - 1), 30)
+            remaining = retry_deadline - time.monotonic()
+            if delay >= remaining:
+                raise IntegrationCheckError(
+                    "Microsoft Graph throttled the Jira notification; its Retry-After delay exceeds the 3-minute retry window.",
+                    status_code=502,
+                    code="notification_throttled",
+                ) from None
+            if cancel_event:
+                if cancel_event.wait(delay):
+                    raise NotificationCancelled("Agent run stopped by user while waiting to retry the notification.")
+            else:
+                time.sleep(delay)
+        except (URLError, TimeoutError) as error:
+            raise IntegrationCheckError(f"Could not reach Microsoft Graph ({type(error).__name__}) while sending the Jira notification.", status_code=502, code="network_error") from None
 
     return {
         "recipient": recipient,

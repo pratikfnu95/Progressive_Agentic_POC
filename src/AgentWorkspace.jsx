@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Activity, ArrowLeft, ArrowRight, Bot, Check, ChevronRight, MessageSquareText, ShieldCheck, UserRound,
   KeyRound, Mail, PlayCircle, RefreshCw, Server, Sparkles, TicketCheck,
-  TriangleAlert,
+  Square, TriangleAlert,
 } from 'lucide-react';
 import { UserAccountMenu } from './Dashboards.jsx';
 
@@ -66,11 +66,11 @@ function AgentWorkflow() {
   </section>;
 }
 
-export function AgentCatalog({ currentUser, onLogin, onLogout, onOpenIncident, onOpenHowItWorks }) {
+export function AgentCatalog({ currentUser, onLogin, onLogout, onOpenIncident, onOpenHowItWorks, onOpenPolicyDashboard }) {
   return (
     <section className="dashboard-page agent-workspace-page agent-catalog-page">
       <div className="dashboard-topbar">
-        <UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} />
+        <UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} onOpenPolicyDashboard={onOpenPolicyDashboard} />
       </div>
       <div className="dashboard-content agent-workspace-content">
         <header className="dashboard-header agent-workspace-header">
@@ -105,7 +105,7 @@ export function AgentCatalog({ currentUser, onLogin, onLogout, onOpenIncident, o
   );
 }
 
-export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenHowItWorks }) {
+export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenHowItWorks, onOpenPolicyDashboard }) {
   const [configuration, setConfiguration] = useState(null);
   const [connectionResults, setConnectionResults] = useState({});
   const [testingProvider, setTestingProvider] = useState('');
@@ -117,6 +117,7 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
   const [checkMessage, setCheckMessage] = useState('');
   const [checkError, setCheckError] = useState('');
   const [triggering, setTriggering] = useState(false);
+  const [stoppingRunId, setStoppingRunId] = useState('');
   const [pendingExecution, setPendingExecution] = useState(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState('');
 
@@ -146,7 +147,7 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
       if (!response.ok) throw new Error(result.error || 'The inbox check could not complete.');
       const windowText = result.window_start && result.window_end ? ` Window ${formatDateTime(result.window_start)}–${formatDateTime(result.window_end)}.` : '';
       setCheckMessage(`${result.message || 'Inbox check complete.'}${windowText}`);
-      setPendingExecution((current) => current ? { ...current, id: result.id || current.id, provisional: false, status: result.status === 'partial' ? 'partially_completed' : result.status === 'failed' ? 'failed' : result.status === 'running' ? 'running' : 'completed', window_start: result.window_start, window_end: result.window_end, completed_at: result.status === 'running' ? null : result.window_end || new Date().toISOString(), emails_found: result.emails_found || 0, emails_processed: result.emails_processed || 0, emails_skipped: result.emails_skipped || 0, tickets_created: result.tickets_created || 0, duplicates_grouped: result.duplicates_grouped || 0, failures: result.failures || 0, message: result.message || '' } : current);
+      setPendingExecution((current) => current ? { ...current, id: result.id || current.id, provisional: false, status: result.status === 'partial' ? 'partially_completed' : result.status === 'failed' ? 'failed' : result.status === 'cancelled' ? 'cancelled' : result.status === 'running' ? 'running' : 'completed', window_start: result.window_start, window_end: result.window_end, completed_at: result.status === 'running' ? null : result.window_end || new Date().toISOString(), emails_found: result.emails_found || 0, emails_processed: result.emails_processed || 0, emails_skipped: result.emails_skipped || 0, tickets_created: result.tickets_created || 0, duplicates_grouped: result.duplicates_grouped || 0, failures: result.failures || 0, message: result.message || '' } : current);
       await refreshAgentStatus();
     } catch (error) {
       setCheckError(error.message || 'The inbox check could not complete.');
@@ -159,6 +160,27 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
       }
     }
     setTriggering(false);
+  }
+
+  async function stopAgentRun(run) {
+    setStoppingRunId(run.id);
+    setCheckError('');
+    try {
+      const response = await fetch('/api/agent-workspace/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: run.id }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not stop this agent run.');
+      if (!result.stopped) throw new Error(result.message || 'This agent run is no longer active.');
+      setCheckMessage(result.message || 'Stop requested.');
+      await refreshAgentStatus();
+    } catch (error) {
+      setCheckError(error.message || 'Could not stop this agent run.');
+    } finally {
+      setStoppingRunId('');
+    }
   }
 
   async function testConnection(provider) {
@@ -298,11 +320,11 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
     const recoveredNotificationPending = recoveredMessages.some((event) => ['active', 'waiting'].includes(event.steps?.find((step) => step.key === 'notify')?.status));
     const recoveredRun = {
       ...lastRun,
-      status: lastRun.status === 'failed' ? 'failed' : lastRun.status === 'partial' ? 'partially_completed' : recoveredNotificationPending ? 'running' : 'completed',
+      status: lastRun.status === 'cancelled' ? 'cancelled' : lastRun.status === 'failed' ? 'failed' : lastRun.status === 'partial' ? 'partially_completed' : recoveredNotificationPending ? 'running' : 'completed',
       active_stage: recoveredNotificationPending ? 'notify' : 'complete',
       window_start: lastRun.window_start,
       window_end: lastRun.window_end,
-      completed_at: lastRun.window_end || agent?.last_run_at,
+      completed_at: lastRun.completed_at || lastRun.window_end || agent?.last_run_at,
       emails_found: lastRun.emails_found || 0,
       emails_processed: lastRun.emails_processed || 0,
       emails_skipped: lastRun.emails_skipped || 0,
@@ -326,7 +348,7 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
   return (
     <section className="dashboard-page agent-workspace-page agent-operations-page">
       <div className="dashboard-topbar">
-        <UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} />
+        <UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} onOpenPolicyDashboard={onOpenPolicyDashboard} />
       </div>
       <div className="dashboard-content agent-workspace-content">
         <header className="dashboard-header agent-workspace-header">
@@ -348,7 +370,7 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
             <thead><tr><th scope="col">Run ID</th><th scope="col">Status</th><th scope="col">Start time</th><th scope="col">End time</th><th scope="col">Duration</th><th scope="col">Emails received</th><th scope="col">Jira tickets</th></tr></thead>
             <tbody>{visibleExecutions.map((run) => <tr className={`is-${run.status}`} key={run.id}>
               <td><button className="agent-run-id-link" type="button" onClick={() => setSelectedExecutionId(run.id)}>{run.id}<ChevronRight size={14} /></button></td>
-              <td><StatusBadge status={run.status} /></td>
+              <td><span className="agent-run-status-cell"><StatusBadge status={run.status} /><StopRunControl run={run} onStop={stopAgentRun} stopping={stoppingRunId === run.id} /></span></td>
               <td>{formatDateTime(run.started_at)}</td>
               <td>{run.completed_at ? formatDateTime(run.completed_at) : <span className="agent-run-in-progress">In progress</span>}</td>
               <td>{formatRunDuration(run)}</td>
@@ -374,7 +396,7 @@ export function AgentWorkspace({ currentUser, onLogin, onLogout, onBack, onOpenH
         </footer>
       </div>
 
-      {selectedExecution ? <RunExecutionDetail run={selectedExecution} onBack={() => setSelectedExecutionId('')} /> : null}
+      {selectedExecution ? <RunExecutionDetail run={selectedExecution} onBack={() => setSelectedExecutionId('')} onStop={stopAgentRun} stopping={stoppingRunId === selectedExecution.id} /> : null}
     </section>
   );
 }
@@ -404,11 +426,16 @@ function affectedEntities(event) {
 }
 
 function StatusBadge({ status }) {
-  const labels = { running: 'Running', active: 'Processing…', completed: 'Success', complete: 'Success', partially_completed: 'Partially completed', partial: 'Partially completed', failed: 'Failure', skipped: 'Not sent', waiting: 'Pending' };
+  const labels = { running: 'Running', active: 'Processing…', completed: 'Success', complete: 'Success', partially_completed: 'Partially completed', partial: 'Partially completed', failed: 'Failure', cancelled: 'Stopped', unconfirmed: 'Unconfirmed', skipped: 'Not sent', waiting: 'Pending' };
   return <span className={`agent-status-badge is-${status || 'running'}`}>{labels[status] || status || 'Running'}</span>;
 }
 
-function RunExecutionDetail({ run, onBack }) {
+function StopRunControl({ run, onStop, stopping = false }) {
+  if (run.status !== 'running') return null;
+  return <button className="agent-stop-run-button" type="button" onClick={() => onStop(run)} disabled={stopping || run.cancellation_requested} aria-label={`Stop agent run ${run.id}`} title={run.cancellation_requested ? 'Stopping agent run' : 'Stop this agent run'}><Square size={11} fill="currentColor" />{run.cancellation_requested ? <span>Stopping…</span> : null}</button>;
+}
+
+function RunExecutionDetail({ run, onBack, onStop, stopping }) {
   const messages = run.messages || [];
   const runActive = run.status === 'running';
   const complete = ['completed', 'complete'].includes(run.status);
@@ -427,6 +454,12 @@ function RunExecutionDetail({ run, onBack }) {
   const stageState = (key) => {
     const statuses = messages.map((event) => event.steps?.find((step) => step.key === key)?.status).filter(Boolean);
     if (noMessageSuccess && key !== 'complete') return 'complete';
+    if (run.status === 'cancelled') {
+      if (key === 'complete' || statuses.includes('cancelled')) return 'cancelled';
+      if (statuses.includes('failed')) return 'failed';
+      if (statuses.some((status) => ['complete', 'duplicate', 'skipped'].includes(status))) return 'complete';
+      return 'waiting';
+    }
     if (runActive) {
       const stageIndex = stageOrder.indexOf(key);
       const activeIndex = stageOrder.indexOf(activeStage);
@@ -436,6 +469,7 @@ function RunExecutionDetail({ run, onBack }) {
       if (statuses.includes('failed')) return 'failed';
       return 'active';
     }
+    if (statuses.includes('unconfirmed')) return 'partial';
     if (key === 'complete') {
       const notificationStatuses = messages.map((event) => event.steps?.find((step) => step.key === 'notify')?.status).filter(Boolean);
       if (run.status === 'failed') return 'failed';
@@ -456,8 +490,8 @@ function RunExecutionDetail({ run, onBack }) {
     { key: 'intent', title: 'Intent & context extraction', caption: noNewEmails ? 'No email to analyze' : noMessageSuccess ? 'No message required analysis' : stageState('intent') === 'active' ? 'Extracting intent and incident context' : 'AI analyzed each message and prepared incident context', timeKey: 'intent' },
     { key: 'duplicate', title: 'Duplicate validation', caption: noNewEmails ? 'No incident to compare' : noMessageSuccess ? 'No incident required comparison' : stageState('duplicate') === 'active' ? 'Checking for matching incidents' : 'Checked for matching incidents before creating Jira issues', timeKey: 'duplicate' },
     { key: 'jira', title: 'Jira ticket creation', caption: noNewEmails ? 'No Jira ticket required' : noMessageSuccess ? 'No ticket needed for this run' : stageState('jira') === 'active' ? 'Creating Jira tickets' : 'Created tickets and linked results to their source emails', timeKey: 'jira' },
-    { key: 'notify', title: 'Requester notification', caption: noNewEmails ? 'No notification required' : noMessageSuccess ? 'No notification needed' : stageState('notify') === 'active' ? 'Waiting for delivery confirmation in Outlook' : 'Notification delivery status', timeKey: 'notify' },
-    { key: 'complete', title: 'Run completed', caption: runActive ? /notification|delivery confirmation/i.test(run.current_step || '') ? 'Waiting for requester notification confirmation' : 'Waiting for earlier steps to finish' : run.status === 'failed' ? 'Run failed' : complete ? 'Completed successfully' : 'Run partially completed' },
+    { key: 'notify', title: 'Requester notification', caption: noNewEmails ? 'No notification required' : noMessageSuccess ? 'No notification needed' : stageState('notify') === 'active' ? 'Waiting for delivery confirmation in Outlook' : messages.some((event) => event.steps?.find((step) => step.key === 'notify')?.status === 'unconfirmed') ? 'Delivery could not be confirmed within 3 minutes' : 'Notification delivery status', timeKey: 'notify' },
+    { key: 'complete', title: run.status === 'cancelled' ? 'Run stopped' : 'Run completed', caption: run.status === 'cancelled' ? 'Stopped by user' : runActive ? /notification|delivery confirmation/i.test(run.current_step || '') ? 'Waiting for requester notification confirmation' : 'Waiting for earlier steps to finish' : run.status === 'failed' ? 'Run failed' : complete ? 'Completed successfully' : 'Run partially completed' },
   ];
   const realStageStates = stages.map((stage) => stageState(stage.key));
   const activeStageIndex = realStageStates.findIndex((status) => ['active', 'waiting'].includes(status));
@@ -491,7 +525,7 @@ function RunExecutionDetail({ run, onBack }) {
     <div className="agent-detail-shell">
       <header className="agent-detail-topbar"><button type="button" onClick={onBack}><ArrowLeft size={15} /> Execution history</button></header>
       <div className="agent-detail-content">
-        <div className="agent-detail-heading"><div><h2 id="agent-run-detail-title">Execution Details</h2><p className="agent-detail-meta">{run.id} · Started {formatDateTime(run.started_at)}{run.completed_at ? ` · Finished ${formatDateTime(run.completed_at)}` : ' · In progress'}</p></div><StatusBadge status={run.status} /></div>
+        <div className="agent-detail-heading"><div><h2 id="agent-run-detail-title">Execution Details</h2><p className="agent-detail-meta">{run.id} · Started {formatDateTime(run.started_at)}{run.completed_at ? ` · Finished ${formatDateTime(run.completed_at)}` : ' · In progress'}</p></div><span className="agent-run-status-cell"><StatusBadge status={run.status} /><StopRunControl run={run} onStop={onStop} stopping={stopping} /></span></div>
         <div className="agent-detail-progress"><span style={{ width: `${progressWidth}%` }} /></div>
         <div className="agent-detail-stats"><Metric label="Emails detected" value={run.emails_found || 0} /><Metric label="Processed" value={run.emails_processed || 0} /><Metric label="Skipped" value={run.emails_skipped || 0} /><Metric label="Tickets created" value={run.tickets_created || 0} /><Metric label="Duplicates grouped" value={run.duplicates_grouped || 0} /><Metric label="Failed" value={run.failures || 0} failed={Boolean(run.failures)} /></div>
         <section className="agent-detail-section"><div className="agent-detail-section-heading"><div><h3>Execution timeline</h3><p>Expand a stage to inspect email, analysis, duplicate, Jira, and notification details.</p></div><div className="agent-timeline-heading-actions"><button className="agent-collapse-all" type="button" onClick={toggleAll}>{allExpanded ? 'Collapse all' : 'Expand all'}</button></div></div>
@@ -501,7 +535,7 @@ function RunExecutionDetail({ run, onBack }) {
             const connectorComplete = status === 'complete' || status === 'duplicate';
             const connectorFlowing = connectorComplete && realStageStates[index + 1] === 'active';
             return <li className={`agent-timeline-step is-${status}${isExpanded ? ' is-expanded' : ''}`} key={stage.key}>
-              <span className="agent-timeline-marker">{status === 'complete' ? <Check size={14} /> : status === 'failed' ? <TriangleAlert size={14} /> : status === 'active' ? <span className="agent-spinner" /> : status === 'partial' ? '!' : <span />}</span>
+              <span className="agent-timeline-marker">{status === 'complete' ? <Check size={14} /> : status === 'failed' ? <TriangleAlert size={14} /> : status === 'active' ? <span className="agent-spinner" /> : status === 'partial' ? '!' : status === 'cancelled' ? <Square size={12} /> : <span />}</span>
               {index < stages.length - 1 && <span className={`agent-timeline-connector${connectorComplete ? ' is-complete' : ''}${connectorFlowing ? ' is-flowing' : ''}`} aria-hidden="true"><i /></span>}
               <div className="agent-timeline-copy"><button className="agent-timeline-toggle" type="button" aria-expanded={isExpanded} onClick={() => toggleStage(stage.key)}><span><strong>{stage.title}</strong><small>{stage.caption}</small></span><span className="agent-timeline-toggle-end">{status === 'active' && <span className="agent-processing-label">Processing…</span>}<time>{stageTime(stage)}</time>{status === 'skipped' && <StatusBadge status="skipped" />}<ChevronRight size={15} /></span></button>{isExpanded && <div className="agent-timeline-expanded">{renderStageContent(stage.key)}</div>}</div>
             </li>;

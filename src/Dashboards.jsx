@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertCircle, ArrowLeft, ArrowUpRight, BadgeCheck, BookOpenCheck, CalendarDays,
   Check, ChevronDown, ChevronRight, CircleDashed, FileWarning, Filter,
-  Hand, LogIn, LogOut, Mail, Plus, RefreshCw, Search, ShieldAlert,
+  Hand, LogIn, LogOut, Mail, Plus, RefreshCw, Search, ShieldAlert, ChartNoAxesColumnIncreasing,
   ArrowDown, ArrowUp, ArrowUpDown,
   Ticket, UserRound, X,
 } from 'lucide-react';
@@ -522,7 +522,7 @@ function PolicyDashboard({ onModal }) {
     <StatCards stats={policyStats} /><div className="dashboard-primary-grid policy-primary-grid"><div className="dashboard-main-column"><TrendPanel /><TicketsTable policy /></div><AssistantPanel onAction={onModal} /></div><div className="dashboard-lower-grid"><IssueCategories /><ActivityPanel policy /></div></>;
 }
 
-export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowItWorks }) {
+export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowItWorks, onOpenPolicyDashboard }) {
   const [modal, setModal] = useState('');
   const [mutationNotice, setMutationNotice] = useState(null);
   const mutationNoticeId = useRef(null);
@@ -714,7 +714,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowI
   }
 
   return <section className="dashboard-page">
-    <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} /></div>
+    <div className="dashboard-topbar"><UserAccountMenu currentUser={currentUser} onLogin={onLogin} onLogout={onLogout} onOpenHowItWorks={onOpenHowItWorks} onOpenPolicyDashboard={onOpenPolicyDashboard} /></div>
     <div className="dashboard-content">{isIncident ? incidentError ? <section className="incident-load-error" role="alert"><h2>Incident tickets are unavailable</h2><p>{incidentError}</p><button className="dashboard-modal-done" onClick={() => refreshIncidentState({ force: true })}>Try again</button></section> : incidentLoading && incidentState.tickets.length === 0 ? <IncidentLoading /> : <IncidentDashboard tickets={incidentState.tickets} activity={incidentState.activity} pendingTicketId={pendingTicketId} onRefresh={() => refreshIncidentState({ force: true })} refreshing={incidentRefreshing} lastUpdated={incidentLastUpdated} onModal={(message) => setModal({ type: 'notice', message })} onCreate={() => setModal({ type: 'create_ticket' })} onReportIssue={() => setModal({ type: 'report_issue' })} onOpenDetails={(ticket) => setModal({ type: 'details', ticket })} /> : <PolicyDashboard onModal={(message) => setModal({ type: 'notice', message })} />}
       {isIncident && <p className="dashboard-footnote"><Filter size={13} />Incident ticket data is served from Jira</p>}
     </div><DashboardModal modal={modal} onClose={() => setModal(null)} onModal={setModal} onAssign={assignTicket} onUnassign={unassignTicket} onDecline={declineTicket} onUpdateStatus={updateTicketStatus} onCreateTicket={createIncidentTicket} onLogin={onLogin} currentUser={currentUser} />
@@ -722,7 +722,7 @@ export function DashboardPage({ page, currentUser, onLogin, onLogout, onOpenHowI
   </section>;
 }
 
-export function UserAccountMenu({ currentUser, onLogin, onLogout, onOpenHowItWorks }) {
+export function UserAccountMenu({ currentUser, onLogin, onLogout, onOpenHowItWorks, onOpenPolicyDashboard }) {
   const [open, setOpen] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [busyUser, setBusyUser] = useState('');
@@ -764,6 +764,7 @@ export function UserAccountMenu({ currentUser, onLogin, onLogout, onOpenHowItWor
       <div className="user-account-popover-heading"><span>{currentUser ? 'Switch account' : 'Choose an account'}</span>{currentUser && <strong>Signed in as {currentUser}</strong>}</div>
       {accountNames.map((person) => <button type="button" key={person} role="menuitem" className={currentUser === person ? 'is-current' : ''} disabled={Boolean(busyUser)} onClick={() => chooseAccount(person)}><span className={`user-account-avatar ${accountAvatarClass(person)}`}>{person[0]}</span><span>{person}</span>{busyUser === person ? <span className="account-switch-spinner" aria-label="Switching account" /> : currentUser === person ? <Check size={15} /> : null}</button>)}
       {currentUser === 'Admin' && onOpenHowItWorks && <button type="button" className="user-account-guide" role="menuitem" onClick={() => { setOpen(false); onOpenHowItWorks(); }}><BookOpenCheck size={15} /><span>How this works</span><ChevronRight size={13} /></button>}
+      {currentUser === 'Admin' && onOpenPolicyDashboard && <button type="button" className="user-account-guide" role="menuitem" onClick={() => { setOpen(false); onOpenPolicyDashboard(); }}><ChartNoAxesColumnIncreasing size={15} /><span>Policy Dashboard</span><ChevronRight size={13} /></button>}
       {loginError && <small className="user-account-error" role="alert">{loginError}</small>}
       {currentUser && <button className="user-account-logout" role="menuitem" onClick={() => { onLogout(); setOpen(false); }}><LogOut size={15} />Log out</button>}
       {!currentUser && <small><LogIn size={12} /> Select your account to continue</small>}

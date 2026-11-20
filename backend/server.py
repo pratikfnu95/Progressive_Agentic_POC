@@ -15,7 +15,7 @@ from backend.agent_workspace.integrations import (
     test_jira_connection,
     test_outlook_connection,
 )
-from backend.agent_workspace.monitor import InboxCheckInProgress, check_inbox_now, reconcile_pending_jira_notifications
+from backend.agent_workspace.monitor import InboxCheckInProgress, cancel_agent_run, check_inbox_now, reconcile_pending_jira_notifications
 from backend.agent_workspace.state import prune_execution_history, read_state
 from backend.api_service import _is_authenticated, dispatch_request, health_status
 from backend.incident_api import dispatch_incident_request
@@ -84,6 +84,20 @@ async def check_agent_workspace_inbox(request: Request):
         return JSONResponse({"error": str(error)}, status_code=409)
     except RuntimeError as error:
         return JSONResponse({"error": str(error)}, status_code=502)
+
+
+@app.post("/api/agent-workspace/cancel")
+async def cancel_agent_workspace_run(request: Request):
+    if not _is_authenticated(request.headers.get("cookie", "")):
+        return JSONResponse({"error": "Enter the application access code to continue."}, status_code=401)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Request body must be a JSON object."}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
+    result = cancel_agent_run(str(payload.get("run_id") or ""))
+    return JSONResponse(result, status_code=202 if result.get("pending") else 200, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/agent-workspace/report-test-email")

@@ -22,6 +22,7 @@ from backend.agent_workspace.integrations import (
     _jira_get,
     _jira_settings,
     _setting,
+    NotificationCancelled,
     send_jira_ticket_notification,
 )
 from backend.agent_workspace.state import read_state, update_event, update_execution, update_state, utc_now
@@ -30,13 +31,104 @@ from backend.deepseek_client import DeepSeekAPIError, chat_completion
 MAX_BODY_CHARS = 20_000
 MAX_BATCH_EMAILS = 50
 MIN_TIMELINE_STAGE_SECONDS = 2.8
+NOTIFICATION_CONFIRMATION_TIMEOUT_SECONDS = 180
+NOTIFICATION_CONFIRMATION_MAX_PAGES_PER_FOLDER = 10
 _CHECK_LOCK = threading.Lock()
+_ACTIVE_RUNS_LOCK = threading.Lock()
+_ACTIVE_RUNS: dict[str, threading.Event] = {}
 _NOTIFICATION_RECONCILE_LOCK = threading.Lock()
 _NOTIFICATION_RECONCILE_LAST_CHECK = 0.0
 
 
 class InboxCheckInProgress(RuntimeError):
     """Raised when a second manual check starts before the current one ends."""
+
+
+class AgentRunCancelled(Exception):
+    """Raised at a safe checkpoint after a user requests that a run stop."""
+
+
+def _raise_if_cancelled(cancel_event: threading.Event) -> None:
+    if cancel_event.is_set():
+        raise AgentRunCancelled("Agent run stopped by user.")
+
+
+def cancel_agent_run(run_id: str = "") -> dict:
+    """Request cancellation of the active run, or stop a run awaiting mail confirmation."""
+    state = read_state()
+    executions = state.get("executions", [])
+    if not isinstance(executions, list):
+        executions = []
+    target = next((item for item in executions if isinstance(item, dict) and item.get("id") == run_id), None) if run_id else next((item for item in executions if isinstance(item, dict) and item.get("status") == "running"), None)
+    if not target or target.get("status") != "running":
+        return {"stopped": False, "message": "There is no running agent execution to stop."}
+
+    target_id = str(target.get("id") or "")
+    with _ACTIVE_RUNS_LOCK:
+        active_cancel = _ACTIVE_RUNS.get(target_id)
+        latest_executions = read_state().get("executions", [])
+        latest_target = next((item for item in latest_executions if isinstance(item, dict) and item.get("id") == target_id), None) if isinstance(latest_executions, list) else None
+        if not latest_target or latest_target.get("status") != "running":
+            return {"stopped": False, "message": "This agent run has already finished."}
+        target = latest_target
+        if active_cancel:
+            active_cancel.set()
+
+    if active_cancel:
+        target["cancellation_requested"] = True
+        target["current_step"] = "Stopping agent run"
+        update_execution(target)
+        current_run = read_state().get("current_run")
+        if isinstance(current_run, dict) and current_run.get("id") == target_id:
+            update_state(current_run={**current_run, "cancellation_requested": True, "current_step": "Stopping agent run"})
+        return {"stopped": True, "pending": True, "run_id": target_id, "message": "Stop requested. The agent will stop at its next safe checkpoint."}
+
+    # A notification awaiting delivery confirmation has no worker thread. Stop
+    # polling it immediately and close the run without claiming delivery.
+    state = read_state()
+    latest_executions = state.get("executions", [])
+    target = next((item for item in latest_executions if isinstance(item, dict) and item.get("id") == target_id), None) if isinstance(latest_executions, list) else None
+    if not target or target.get("status") != "running":
+        return {"stopped": False, "message": "This agent run has already finished."}
+    pending = state.get("pending_jira_notifications", [])
+    pending = pending if isinstance(pending, list) else []
+    cancelled_notices = [item for item in pending if isinstance(item, dict) and str(item.get("run_id") or "") == target_id]
+    remaining = [item for item in pending if not (isinstance(item, dict) and str(item.get("run_id") or "") == target_id)]
+    event_ids = {str(event_id) for item in cancelled_notices for event_id in item.get("event_ids", [])}
+    events = state.get("events", [])
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict) or str(event.get("run_id") or "") != target_id:
+            continue
+        for step in event.get("steps", []):
+            if step.get("status") not in ("active", "waiting"):
+                continue
+            detail = "Delivery confirmation polling was stopped by user; the Jira ticket remains created." if step.get("key") == "notify" and str(event.get("id") or "") in event_ids else "Run stopped by user before this step completed."
+            _step(event, str(step.get("key") or ""), "cancelled", detail)
+        if event.get("status") not in ("created", "duplicate", "failed"):
+            event["status"] = "cancelled"
+            update_event(event)
+
+    stopped_at = utc_now()
+    target.update({
+        "status": "cancelled",
+        "completed_at": stopped_at,
+        "active_stage": "complete",
+        "stage_times": {**target.get("stage_times", {}), "complete": stopped_at},
+        "current_step": "Run stopped by user",
+        "message": "Run stopped while waiting for Outlook delivery confirmation. Any Jira ticket already created remains in Jira; delivery was not confirmed.",
+        "cancellation_requested": False,
+    })
+    update_execution(target)
+    latest = read_state()
+    current_run = latest.get("current_run")
+    latest_result = latest.get("last_run_result")
+    updates = {"pending_jira_notifications": remaining, "monitor_status": "manual"}
+    if isinstance(current_run, dict) and current_run.get("id") == target_id:
+        updates["current_run"] = None
+    if isinstance(latest_result, dict) and latest_result.get("id") == target_id:
+        updates["last_run_result"] = {**latest_result, "status": "cancelled", "completed_at": stopped_at, "message": target["message"]}
+    update_state(**updates)
+    return {"stopped": True, "pending": False, "run_id": target_id, "message": "Run stopped. Any Jira ticket already created remains in Jira; its notification is not marked as delivered."}
 
 
 def _graph_get(url: str, token: str) -> dict:
@@ -100,81 +192,163 @@ def reconcile_pending_jira_notifications() -> None:
             update_state(pending_jira_notifications=pending[-500:])
         if not pending:
             return
-        if time.monotonic() - _NOTIFICATION_RECONCILE_LAST_CHECK < 5:
-            return
-        _NOTIFICATION_RECONCILE_LAST_CHECK = time.monotonic()
-
-        # The notification destination is the connected Outlook inbox. Graph
-        # sendMail has no delivery callback, so inspect Inbox and Junk Email for
-        # the unique ticket subject after Exchange accepted the send request.
-        token = _get_outlook_token()
-        earliest = min(str(item.get("accepted_at") or "") for item in pending)
-        try:
-            earliest_dt = datetime.fromisoformat(earliest.replace("Z", "+00:00"))
-        except ValueError:
-            earliest_dt = datetime.now(timezone.utc)
-        # Allow small clock skew between the app host and Exchange timestamps.
-        received_after = (earliest_dt - timedelta(seconds=15)).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        query = urlencode({
-            "$filter": f"receivedDateTime ge {received_after}",
-            "$select": "subject,receivedDateTime,toRecipients",
-            "$top": "100",
-        })
-        folders = {
-            "Inbox": "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
-            "Junk Email": "https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages",
-        }
-        delivered: dict[str, str] = {}
-        for folder_name, folder_url in folders.items():
-            try:
-                messages = _graph_get(f"{folder_url}?{query}", token).get("value", [])
-            except RuntimeError:
-                # A transient Graph read issue must leave the notification
-                # pending; it must never turn an unverified send green.
-                return
-            for message in messages:
-                subject = str(message.get("subject") or "")
-                recipients = {
-                    str((recipient.get("emailAddress") or {}).get("address") or "").casefold()
-                    for recipient in message.get("toRecipients", [])
-                }
-                for notice in pending:
-                    if subject == notice.get("subject") and str(notice.get("recipient") or "").casefold() in recipients:
-                        confirm_after = str(notice.get("confirm_after") or "")
-                        if confirm_after:
-                            try:
-                                if datetime.now(timezone.utc) < datetime.fromisoformat(confirm_after.replace("Z", "+00:00")):
-                                    continue
-                            except ValueError:
-                                pass
-                        delivered[str(notice.get("id") or "")] = folder_name
-
-        if not delivered:
-            return
-
-        remaining = []
-        events = [event for event in state.get("events", []) if isinstance(event, dict)]
-        events_by_id = {str(event.get("id") or ""): event for event in events}
+        now = datetime.now(timezone.utc)
+        waiting: list[dict] = []
+        expired: list[dict] = []
         for notice in pending:
+            if not isinstance(notice, dict):
+                continue
+            deadline = str(notice.get("confirmation_deadline") or "")
+            if not deadline:
+                try:
+                    accepted_at = datetime.fromisoformat(str(notice.get("accepted_at") or "").replace("Z", "+00:00"))
+                except ValueError:
+                    accepted_at = now
+                deadline = (accepted_at + timedelta(seconds=NOTIFICATION_CONFIRMATION_TIMEOUT_SECONDS)).isoformat(timespec="seconds").replace("+00:00", "Z")
+                notice["confirmation_deadline"] = deadline
+            try:
+                timed_out = now >= datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    accepted_at = datetime.fromisoformat(str(notice.get("accepted_at") or "").replace("Z", "+00:00"))
+                except ValueError:
+                    accepted_at = now
+                timed_out = now >= accepted_at + timedelta(seconds=NOTIFICATION_CONFIRMATION_TIMEOUT_SECONDS)
+            (expired if timed_out else waiting).append(notice)
+
+        # Confirm promptly while the message can still arrive. Once the deadline
+        # passes, stop polling and report the result as unconfirmed, not delivered.
+        delivered: dict[str, str] = {}
+        should_check_mailbox = bool(waiting) and time.monotonic() - _NOTIFICATION_RECONCILE_LAST_CHECK >= 5
+        if should_check_mailbox:
+            _NOTIFICATION_RECONCILE_LAST_CHECK = time.monotonic()
+            try:
+                token = _get_outlook_token()
+                earliest = min(str(item.get("accepted_at") or "") for item in waiting)
+                try:
+                    earliest_dt = datetime.fromisoformat(earliest.replace("Z", "+00:00"))
+                except ValueError:
+                    earliest_dt = now
+                received_after = (earliest_dt - timedelta(seconds=15)).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                query = urlencode({
+                    "$filter": f"receivedDateTime ge {received_after}",
+                    "$select": "subject,receivedDateTime,toRecipients",
+                    "$top": "100",
+                })
+                folders = {
+                    "Inbox": "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
+                    "Junk Email": "https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages",
+                }
+                for folder_name, folder_url in folders.items():
+                    page_url = f"{folder_url}?{query}"
+                    page_count = 0
+                    while page_url and page_count < NOTIFICATION_CONFIRMATION_MAX_PAGES_PER_FOLDER:
+                        page = _graph_get(page_url, token)
+                        page_count += 1
+                        for message in page.get("value", []):
+                            subject = str(message.get("subject") or "")
+                            recipients = {
+                                str((recipient.get("emailAddress") or {}).get("address") or "").casefold()
+                                for recipient in message.get("toRecipients", [])
+                            }
+                            for notice in waiting:
+                                if subject != notice.get("subject") or str(notice.get("recipient") or "").casefold() not in recipients:
+                                    continue
+                                confirm_after = str(notice.get("confirm_after") or "")
+                                if confirm_after:
+                                    try:
+                                        if now < datetime.fromisoformat(confirm_after.replace("Z", "+00:00")):
+                                            continue
+                                    except ValueError:
+                                        pass
+                                delivered[str(notice.get("id") or "")] = folder_name
+                        page_url = str(page.get("@odata.nextLink") or "")
+            except (IntegrationCheckError, RuntimeError, ValueError, TypeError):
+                # A mailbox read problem is not evidence of delivery or failure;
+                # leave unexpired notifications pending for the next poll.
+                delivered = {}
+
+        # Apply terminal notification outcomes to the events, then finish any run
+        # whose notices have all either been confirmed or reached their deadline.
+        latest_state = read_state()
+        current_pending = latest_state.get("pending_jira_notifications", [])
+        current_pending = current_pending if isinstance(current_pending, list) else []
+        current_pending_ids = {str(item.get("id") or "") for item in current_pending if isinstance(item, dict)}
+        current_executions = latest_state.get("executions", [])
+        cancelled_run_ids = {
+            str(item.get("id") or "") for item in current_executions
+            if isinstance(item, dict) and item.get("status") == "cancelled"
+        } if isinstance(current_executions, list) else set()
+        terminal_notices = [
+            notice for notice in [*waiting, *expired]
+            if str(notice.get("id") or "") in current_pending_ids
+            and str(notice.get("run_id") or "") not in cancelled_run_ids
+        ]
+        current_events = [event for event in latest_state.get("events", []) if isinstance(event, dict)]
+        events_by_id = {str(event.get("id") or ""): event for event in current_events}
+        for notice in terminal_notices:
             notice_id = str(notice.get("id") or "")
             folder_name = delivered.get(notice_id)
-            if not folder_name:
-                remaining.append(notice)
+            is_expired = notice in expired and not folder_name
+            if not folder_name and not is_expired:
                 continue
-            detail = f"Jira assignment notification sent to {notice.get('recipient')} for {notice.get('ticket_key')} · Delivery confirmed"
+            if folder_name:
+                detail = f"Jira assignment notification to {notice.get('recipient')} for {notice.get('ticket_key')} · Delivery confirmed"
+                status = "complete"
+            else:
+                timeout_minutes = NOTIFICATION_CONFIRMATION_TIMEOUT_SECONDS // 60
+                detail = f"Outlook accepted the notification for {notice.get('ticket_key')}, but delivery was not confirmed within {timeout_minutes} minutes. The Jira ticket remains created; no automatic resend was made."
+                status = "unconfirmed"
             for event_id in notice.get("event_ids", []):
                 event = events_by_id.get(str(event_id))
                 if event:
-                    _step(event, "notify", "complete", detail)
+                    _step(event, "notify", status, detail)
+
+        expired_ids = {str(notice.get("id") or "") for notice in expired}
+        remaining = [
+            notice for notice in current_pending
+            if isinstance(notice, dict)
+            and str(notice.get("id") or "") not in delivered
+            and str(notice.get("id") or "") not in expired_ids
+            and str(notice.get("run_id") or "") not in cancelled_run_ids
+        ]
         update_state(pending_jira_notifications=remaining)
+        completed_notices = [notice for notice in terminal_notices if str(notice.get("id") or "") in delivered or notice in expired]
+        terminal_run_ids = {str(item.get("run_id") or "") for item in completed_notices if item.get("run_id")}
         remaining_run_ids = {str(item.get("run_id") or "") for item in remaining if isinstance(item, dict)}
-        resolved_run_ids = {str(item.get("run_id") or "") for item in pending if str(item.get("id") or "") in delivered}
-        for run_id in resolved_run_ids - remaining_run_ids:
-            run = next((item for item in read_state().get("executions", []) if item.get("id") == run_id), None)
-            if run and run.get("status") == "running" and run.get("current_step") == "Waiting for requester notification delivery confirmation":
-                finished_at = utc_now()
-                run.update({"status": "completed" if not run.get("failures") else "partially_completed", "active_stage": "complete", "stage_times": {**run.get("stage_times", {}), "complete": finished_at}, "completed_at": finished_at, "current_step": "Run completed" if not run.get("failures") else "Run completed with errors"})
-                update_execution(run)
+        for run_id in terminal_run_ids - remaining_run_ids - cancelled_run_ids:
+            latest_state = read_state()
+            run = next((item for item in latest_state.get("executions", []) if item.get("id") == run_id), None)
+            if not run or run.get("status") != "running":
+                continue
+            run_notices = [item for item in completed_notices if str(item.get("run_id") or "") == run_id]
+            unconfirmed_count = sum(1 for item in run_notices if item in expired and str(item.get("id") or "") not in delivered)
+            finished_at = utc_now()
+            failure_count = int(run.get("failures", 0) or 0) + unconfirmed_count
+            run_message = str(run.get("message") or "Run finished.")
+            if unconfirmed_count:
+                timeout_minutes = NOTIFICATION_CONFIRMATION_TIMEOUT_SECONDS // 60
+                run_message = f"{run_message} {unconfirmed_count} requester notification(s) could not be confirmed within {timeout_minutes} minutes; the related Jira ticket(s) remain created."
+            run.update({
+                "status": "partially_completed" if failure_count else "completed",
+                "active_stage": "complete",
+                "stage_times": {**run.get("stage_times", {}), "complete": finished_at},
+                "completed_at": finished_at,
+                "current_step": "Run completed with unconfirmed notifications" if unconfirmed_count else "Run completed" if not failure_count else "Run completed with errors",
+                "failures": failure_count,
+                "unconfirmed_notifications": unconfirmed_count,
+                "message": run_message,
+            })
+            update_execution(run)
+            latest_result = read_state().get("last_run_result")
+            if isinstance(latest_result, dict) and latest_result.get("id") == run_id:
+                latest_result.update({
+                    "status": "partial" if failure_count else "complete",
+                    "failures": failure_count,
+                    "unconfirmed_notifications": unconfirmed_count,
+                    "message": run_message,
+                })
+                update_state(last_run_result=latest_result)
     except (IntegrationCheckError, RuntimeError, ValueError, TypeError):
         # Authorization expiry or a temporary service problem leaves the UI in
         # its truthful pending state. A later status refresh will try again.
@@ -515,10 +689,13 @@ def _step(event: dict, key: str, status: str, detail: str) -> None:
     update_event(event)
 
 
-def _wait_for_stage_minimum(started_at: float) -> None:
+def _wait_for_stage_minimum(started_at: float, cancel_event: threading.Event | None = None) -> None:
     remaining = MIN_TIMELINE_STAGE_SECONDS - (time.monotonic() - started_at)
     if remaining > 0:
-        time.sleep(remaining)
+        if cancel_event and cancel_event.wait(remaining):
+            raise AgentRunCancelled("Agent run stopped by user.")
+        if not cancel_event:
+            time.sleep(remaining)
 
 
 def _set_execution_stage(execution: dict, stage: str, label: str) -> None:
@@ -543,6 +720,7 @@ def check_inbox_now() -> dict:
     if not _CHECK_LOCK.acquire(blocking=False):
         raise InboxCheckInProgress("An inbox check is already in progress.")
     execution: dict | None = None
+    cancel_event: threading.Event | None = None
     try:
         state = read_state()
         end_at = datetime.now(timezone.utc)
@@ -563,11 +741,16 @@ def check_inbox_now() -> dict:
         run_id = f"RUN-{sequence:04d}"
         run_started_at = end_at.isoformat(timespec="milliseconds")
         execution = {"id": run_id, "status": "running", "started_at": run_started_at, "completed_at": None, "active_stage": "email", "stage_times": {"email": run_started_at}, "current_step": "Checking Outlook inbox", "emails_found": 0, "emails_processed": 0, "emails_skipped": 0, "tickets_created": 0, "duplicates_grouped": 0, "failures": 0, "event_ids": [], "message": "Agent run started."}
+        cancel_event = threading.Event()
+        with _ACTIVE_RUNS_LOCK:
+            _ACTIVE_RUNS[run_id] = cancel_event
         update_execution(execution)
         update_state(execution_sequence=sequence)
 
+        _raise_if_cancelled(cancel_event)
         base_url, email, api_token, project_key = _jira_settings()
         _jira_get(base_url, email, api_token, f"/rest/api/3/project/{quote(project_key, safe='')}")
+        _raise_if_cancelled(cancel_event)
         outlook_token = _get_outlook_token()
         update_state(
             monitor_status="checking",
@@ -583,6 +766,7 @@ def check_inbox_now() -> dict:
         }
         email_stage_started = time.monotonic()
         inbox_headers = _list_window_headers(outlook_token, start_at, end_at)
+        _raise_if_cancelled(cancel_event)
         junk_scan_error = ""
         try:
             junk_report_headers = _pending_poc_reports_in_junk(
@@ -624,6 +808,7 @@ def check_inbox_now() -> dict:
         retrieved: list[dict] = []
         failures = 0
         for header in candidate_headers:
+            _raise_if_cancelled(cancel_event)
             message_id = str(header["id"])
             event = _create_event(header, message_id, run_id)
             update_event(event)
@@ -631,6 +816,7 @@ def check_inbox_now() -> dict:
             update_execution(execution)
             try:
                 message = _get_message(outlook_token, message_id, str(header.get("_folder_url") or GRAPH_INBOX_URL))
+                _raise_if_cancelled(cancel_event)
                 body = _plain_text(message)
                 if not body:
                     raise RuntimeError("Email has no readable text.")
@@ -647,7 +833,7 @@ def check_inbox_now() -> dict:
                 _mark_failed(event, "email", str(error))
                 failures += 1
 
-        _wait_for_stage_minimum(email_stage_started)
+        _wait_for_stage_minimum(email_stage_started, cancel_event)
         for item in retrieved:
             event = item["event"]
             message = item["message"]
@@ -661,8 +847,10 @@ def check_inbox_now() -> dict:
         batch: list[dict] = []
         intent_stage_started = time.monotonic()
         for item in retrieved:
+            _raise_if_cancelled(cancel_event)
             try:
                 extracted = _classify_and_summarize(item["message"], item["body"])
+                _raise_if_cancelled(cancel_event)
                 item["event"].update({key: extracted[key] for key in ("intent", "summary", "description")})
                 batch.append({
                     "message_id": item["message_id"],
@@ -676,7 +864,7 @@ def check_inbox_now() -> dict:
             except (DeepSeekAPIError, IntegrationCheckError, RuntimeError, ValueError) as error:
                 _mark_failed(item["event"], "intent", str(error))
                 failures += 1
-        _wait_for_stage_minimum(intent_stage_started)
+        _wait_for_stage_minimum(intent_stage_started, cancel_event)
         for item in batch:
             _step(item["event"], "intent", "complete", "Intent and ticket context extracted")
 
@@ -688,8 +876,10 @@ def check_inbox_now() -> dict:
         regular_indices = [index for index, item in enumerate(batch) if not item.get("force_new_ticket")]
         groups: list[list[int]] = [[index] for index in test_report_indices]
         if regular_indices:
+            _raise_if_cancelled(cancel_event)
             try:
                 regular_groups = _group_duplicates([batch[index] for index in regular_indices])
+                _raise_if_cancelled(cancel_event)
                 groups.extend([[regular_indices[index] for index in group] for group in regular_groups])
             except (DeepSeekAPIError, RuntimeError, ValueError) as error:
                 for index in regular_indices:
@@ -702,19 +892,22 @@ def check_inbox_now() -> dict:
         current_run_keys: set[str] = set()
         plans: list[dict] = []
         for indices in groups:
+            _raise_if_cancelled(cancel_event)
             group = [batch[index] for index in indices]
             if not group:
                 continue
             force_new = all(item.get("force_new_ticket") for item in group)
             try:
+                _raise_if_cancelled(cancel_event)
                 # UI reports are always new Jira issues, but this exact-label
                 # lookup still protects retries from creating the same issue twice.
                 existing_ticket = _jira_duplicate(group, project_key, current_run_keys, match_summary=not force_new)
+                _raise_if_cancelled(cancel_event)
                 plans.append({"group": group, "force_new": force_new, "existing_ticket": existing_ticket})
             except (IntegrationCheckError, RuntimeError, ValueError) as error:
                 plans.append({"group": group, "force_new": force_new, "duplicate_error": error})
 
-        _wait_for_stage_minimum(duplicate_stage_started)
+        _wait_for_stage_minimum(duplicate_stage_started, cancel_event)
         ticket_plans: list[dict] = []
         for plan in plans:
             group = plan["group"]
@@ -768,12 +961,13 @@ def check_inbox_now() -> dict:
 
         created_plans: list[dict] = []
         for plan in ticket_plans:
+            _raise_if_cancelled(cancel_event)
             try:
                 plan["issue"] = _create_jira_issue(plan["group"], project_key)
                 created_plans.append(plan)
             except (IntegrationCheckError, RuntimeError, ValueError) as error:
                 plan["jira_error"] = error
-        _wait_for_stage_minimum(jira_stage_started)
+        _wait_for_stage_minimum(jira_stage_started, cancel_event)
 
         notifications_to_send: list[dict] = []
         for plan in ticket_plans:
@@ -804,6 +998,8 @@ def check_inbox_now() -> dict:
                     _step(event, "jira", "duplicate", f"Grouped under {issue_key}; no second ticket created")
                 processed_now.append(event["id"])
             tickets_created += 1
+            execution["tickets_created"] = tickets_created
+            update_execution(execution)
             plan.update({"issue_key": issue_key, "issue_url": issue_url, "leader": leader})
             notifications_to_send.append(plan)
 
@@ -811,6 +1007,7 @@ def check_inbox_now() -> dict:
         notification_stage_started = time.monotonic()
         notification_errors: list[tuple[dict, Exception]] = []
         for plan in notifications_to_send:
+            _raise_if_cancelled(cancel_event)
             group = plan["group"]
             issue_key = plan["issue_key"]
             issue_url = plan["issue_url"]
@@ -822,7 +1019,9 @@ def check_inbox_now() -> dict:
                     plan["leader"]["extracted"]["summary"],
                     "Medium",
                     issue_url,
+                    cancel_event=cancel_event,
                 )
+                _raise_if_cancelled(cancel_event)
                 accepted_at = notification_result["accepted_at"]
                 confirmation_after = (datetime.fromisoformat(accepted_at.replace("Z", "+00:00")) + timedelta(seconds=MIN_TIMELINE_STAGE_SECONDS)).isoformat(timespec="seconds").replace("+00:00", "Z")
                 notice = {
@@ -842,7 +1041,7 @@ def check_inbox_now() -> dict:
                     _step(item["event"], "notify", "active", f"Outlook accepted the notification; waiting for delivery confirmation for {issue_key}")
             except (IntegrationCheckError, RuntimeError, ValueError) as error:
                 notification_errors.append((plan, error))
-        _wait_for_stage_minimum(notification_stage_started)
+        _wait_for_stage_minimum(notification_stage_started, cancel_event)
         for plan, error in notification_errors:
             failures += len(plan["group"])
             for item in plan["group"]:
@@ -890,6 +1089,7 @@ def check_inbox_now() -> dict:
             "failures": failures,
             "message": result_message,
         }
+        _raise_if_cancelled(cancel_event)
         pending_for_run = any(
             isinstance(notice, dict) and notice.get("run_id") == run_id
             for notice in read_state().get("pending_jira_notifications", [])
@@ -926,6 +1126,59 @@ def check_inbox_now() -> dict:
             error=f"{failures} email(s) need retry." if failures else "",
         )
         return result
+    except NotificationCancelled as error:
+        raise AgentRunCancelled(str(error)) from None
+    except AgentRunCancelled as error:
+        stopped_at = utc_now()
+        state = read_state()
+        run_id = str(execution.get("id") or "") if execution else ""
+        pending = state.get("pending_jira_notifications", [])
+        pending = pending if isinstance(pending, list) else []
+        cancelled_notices = [item for item in pending if isinstance(item, dict) and str(item.get("run_id") or "") == run_id]
+        remaining = [item for item in pending if not (isinstance(item, dict) and str(item.get("run_id") or "") == run_id)]
+        event_ids = {str(event_id) for notice in cancelled_notices for event_id in notice.get("event_ids", [])}
+        for event in state.get("events", []) if isinstance(state.get("events", []), list) else []:
+            if not isinstance(event, dict) or event.get("run_id") != run_id:
+                continue
+            if str(event.get("id") or "") in event_ids:
+                _step(event, "notify", "cancelled", "Delivery confirmation polling was stopped by user; the Jira ticket remains created.")
+            for step in event.get("steps", []):
+                if step.get("status") in ("active", "waiting"):
+                    _step(event, str(step.get("key") or ""), "cancelled", "Run stopped by user before this step completed.")
+            if event.get("status") not in ("created", "duplicate", "failed"):
+                event["status"] = "cancelled"
+                update_event(event)
+        if execution:
+            execution.update({
+                "status": "cancelled",
+                "completed_at": stopped_at,
+                "active_stage": "complete",
+                "stage_times": {**execution.get("stage_times", {}), "complete": stopped_at},
+                "current_step": "Run stopped by user",
+                "message": "Run stopped by user. Any Jira ticket already created remains in Jira; pending notification delivery was not confirmed.",
+                "cancellation_requested": False,
+            })
+            update_execution(execution)
+        latest = read_state()
+        current_run = latest.get("current_run")
+        updates = {"pending_jira_notifications": remaining, "monitor_status": "manual", "last_check_at": stopped_at, "error": ""}
+        if isinstance(current_run, dict) and current_run.get("id") == run_id:
+            updates["current_run"] = None
+        if run_id:
+            updates["last_run_result"] = {
+                "id": run_id,
+                "status": "cancelled",
+                "completed_at": stopped_at,
+                "emails_found": int(execution.get("emails_found", 0) or 0),
+                "emails_processed": int(execution.get("emails_processed", 0) or 0),
+                "emails_skipped": int(execution.get("emails_skipped", 0) or 0),
+                "tickets_created": int(execution.get("tickets_created", 0) or 0),
+                "duplicates_grouped": int(execution.get("duplicates_grouped", 0) or 0),
+                "failures": int(execution.get("failures", 0) or 0),
+                "message": execution.get("message", str(error)),
+            }
+        update_state(**updates)
+        return {"id": run_id, "status": "cancelled", "message": execution.get("message", str(error)) if execution else str(error)}
     except (IntegrationCheckError, RuntimeError, DeepSeekAPIError, ValueError) as error:
         state = read_state()
         if execution:
@@ -941,5 +1194,8 @@ def check_inbox_now() -> dict:
         )
         raise RuntimeError(str(error)) from None
     finally:
+        if execution and execution.get("id"):
+            with _ACTIVE_RUNS_LOCK:
+                _ACTIVE_RUNS.pop(str(execution["id"]), None)
         _CHECK_LOCK.release()
 
