@@ -1,7 +1,7 @@
 {
   "document_title": "Illustrative resolved incident references",
   "provenance": "Synthetic examples created for the POC. These are not real Progressive incidents, verified historical tickets, or production resolutions. Use them only as starting-point patterns; validate all checks against current evidence and approved runbooks.",
-  "case_count": 22,
+  "case_count": 25,
   "status_semantics": "illustrative_resolved means the sample scenario includes a representative resolution workflow; it does not assert a real incident occurred.",
   "cases": [
     {
@@ -780,6 +780,115 @@
         "gold_dim_policy_jacket",
         "gold_fact_policy_transaction"
       ]
+    },
+    {
+      "reference_id": "REF-AGENCY-001",
+      "case_key": "new_agency_account_setup",
+      "status": "illustrative_resolved",
+      "issue_category": "Agency onboarding",
+      "issue_summary": "New agency account setup and access provisioning",
+      "match_terms": [
+        "new agency account setup",
+        "agency onboarding",
+        "create agency account",
+        "agency access",
+        "newly onboarded agency",
+        "workers compensation policies",
+        "agency setup"
+      ],
+      "resolution_summary": "Illustrative workflow: verify the onboarding request and agency details, confirm account and access setup with the responsible system owner, then validate the agency is available to downstream policy and reporting processes.",
+      "resolution_steps": [
+        {
+          "title": "Confirm the onboarding request",
+          "instruction": "Review the ticket for the agency name and code, agency type, primary contact, requested access, and effective date. Resolve missing or inconsistent details with the requester before setup.",
+          "verify": "The agency identifiers and required setup details agree across the ticket and approved onboarding request."
+        },
+        {
+          "title": "Verify account and access setup",
+          "instruction": "Use the approved agency-management procedure to check that the agency account exists and the requested access is configured. Ask the owning team to confirm any setup action; do not include credentials in the ticket.",
+          "verify": "The system owner confirms the account is active and the requested access is available to the agency."
+        },
+        {
+          "title": "Check downstream availability",
+          "instruction": "Using the approved data and reporting runbooks, verify that the agency is available to downstream producer and policy-processing workflows.",
+          "verify": "The agency can be selected or mapped in the intended downstream workflow, with no unsupported table assumptions."
+        }
+      ],
+      "watch_for": "A created account does not by itself confirm that access is correct or that downstream producer and reporting data has synchronized.",
+      "source_tables": []
+    },
+    {
+      "reference_id": "REF-AGENCY-002",
+      "case_key": "agency_commission_distribution_failure",
+      "status": "illustrative_resolved",
+      "issue_category": "Agency commission distribution",
+      "issue_summary": "Agency commission amounts are missing from downstream EDW reporting",
+      "match_terms": [
+        "agency commission distribution failure",
+        "commission distribution",
+        "commission amounts",
+        "agency commissions",
+        "commission missing from EDW",
+        "commission synchronization",
+        "agency payment reporting"
+      ],
+      "resolution_summary": "Illustrative workflow: identify the affected processing cycle and agencies, reconcile commission amounts at a consistent grain across documented stages, and locate the earliest point where the values diverge.",
+      "resolution_steps": [
+        {
+          "title": "Identify the affected cycle and agencies",
+          "instruction": "Capture the processing-cycle or batch reference, affected agency codes, reported amounts, and the distribution-job outcome from the ticket and approved operational records.",
+          "verify": "The cycle, agency set, and reported total are internally consistent before comparing systems."
+        },
+        {
+          "title": "Reconcile commission values by agency",
+          "instruction": "Compare calculated commission amounts with downstream EDW values for the same cycle and agency codes, using the documented data sources and matching business grain.",
+          "verify": "Record which agencies or amounts differ and the earliest documented stage where they diverge."
+        },
+        {
+          "title": "Check the synchronization path",
+          "instruction": "Review approved load and transformation evidence for rejected or excluded records, mapping differences, join behavior, and load timing. Ask the owning team to validate any corrective action.",
+          "verify": "The owner can account for each affected agency amount in the downstream reporting output after the approved correction or next load."
+        }
+      ],
+      "watch_for": "A successful distribution job does not prove downstream EDW tables were updated. Compare the same cycle and agency grain, and do not infer EDW table names that are absent from the approved schema documentation.",
+      "source_tables": []
+    },
+    {
+      "reference_id": "REF-AGENCY-003",
+      "case_key": "missing_edw_agency",
+      "status": "illustrative_resolved",
+      "issue_category": "Missing agency data",
+      "issue_summary": "Newly onboarded agencies are missing from the EDW Producer Dimension",
+      "match_terms": [
+        "missing edw agency",
+        "agency information missing in EDW",
+        "agency missing from producer dimension",
+        "newly onboarded agencies",
+        "producer dimension",
+        "affected agency codes",
+        "agency data load",
+        "agency records missing downstream"
+      ],
+      "resolution_summary": "Illustrative workflow: trace the reported agency codes and batch from the source through the documented load path, then identify whether records were rejected, excluded, or failed a mapping or join before reaching the EDW Producer Dimension.",
+      "resolution_steps": [
+        {
+          "title": "Confirm the affected agencies and batch",
+          "instruction": "Collect the agency codes, sample agency names, and batch or load reference from the ticket. Confirm that the agency records exist in the stated source system for the relevant run.",
+          "verify": "Each reported code is tied to the correct source record and processing batch."
+        },
+        {
+          "title": "Trace records through the load path",
+          "instruction": "Use the approved lineage and ETL runbook to follow each code from source ingestion through transformations to the EDW Producer Dimension. Check available reject, exclusion, and mapping evidence.",
+          "verify": "Identify the first documented stage where an expected agency record is absent or changes identity."
+        },
+        {
+          "title": "Validate producer and policy reporting",
+          "instruction": "After the owning team reviews the cause, verify the agency appears in the intended downstream producer data and that related policies map to the expected agency in reporting.",
+          "verify": "The affected agency codes and related policy mappings are present in the target reporting workflow."
+        }
+      ],
+      "watch_for": "An agency may exist in its source system while being absent from the EDW dimension; validate each code across the load path and do not assume undocumented EDW table names or filters.",
+      "source_tables": []
     }
   ]
 }

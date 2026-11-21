@@ -2021,7 +2021,12 @@ button.agent-catalog-card:hover { transform: translateY(-2px); border-color: #aa
 .agent-timeline-heading-actions { display: inline-flex; align-items: center; gap: 10px; }
 .agent-timeline-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 14px; padding: 2px 0 7px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .agent-timeline-toggle > span:first-child { display: grid; min-width: 0; gap: 4px; }
-.agent-timeline-toggle strong { color: #35566b; font-size: 11px; }
+.agent-timeline-toggle strong { display: inline-flex; align-items: center; gap: 7px; color: #35566b; font-size: 11px; }
+.agent-timeline-stage-icon { display: inline-grid; width: 15px; height: 15px; flex: 0 0 15px; place-items: center; color: #087db5; }
+.agent-timeline-stage-icon svg { display: block; width: 15px; height: 15px; }
+.agent-timeline-stage-icon.is-outlook svg,.agent-timeline-stage-icon.is-jira svg { width: 15px; height: 15px; }
+.agent-timeline-stage-icon.is-validation { color: #20965b; }
+.agent-timeline-stage-icon.is-notify { color: #1682b5; }
 .agent-timeline-toggle small { color: #82949f; font-size: 9px; line-height: 1.4; }
 .agent-timeline-toggle-end { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 9px; color: #91a0a8; }
 .agent-timeline-toggle-end time { font-size: 8px; }
